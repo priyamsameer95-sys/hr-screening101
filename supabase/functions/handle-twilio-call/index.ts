@@ -43,11 +43,12 @@ serve(async (req) => {
 
     console.log('Call found for candidate:', call.candidate.full_name);
 
-    // Generate WebSocket stream URL
-    const BASE_URL = Deno.env.get('SUPABASE_URL')?.replace('https://', 'wss://');
+    // Generate WebSocket stream URL - use HTTPS for Twilio to establish the WebSocket
+    const BASE_URL = Deno.env.get('SUPABASE_URL');
     const streamUrl = `${BASE_URL}/functions/v1/elevenlabs-stream?callId=${callId}`;
 
     console.log('Generating TwiML with stream URL:', streamUrl);
+    console.log('Call ID being passed:', callId);
 
     // Generate TwiML to connect to ElevenLabs via WebSocket
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>

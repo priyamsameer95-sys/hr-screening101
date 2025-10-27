@@ -2,17 +2,30 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 serve(async (req) => {
-  const { socket, response } = Deno.upgradeWebSocket(req);
+  const upgradeHeader = req.headers.get("upgrade") || "";
   
+  if (upgradeHeader.toLowerCase() !== "websocket") {
+    return new Response("Expected WebSocket connection", { status: 400 });
+  }
+
   const url = new URL(req.url);
   const callId = url.searchParams.get('callId');
   const agentId = Deno.env.get('ELEVENLABS_AGENT_ID');
   const apiKey = Deno.env.get('ELEVENLABS_API_KEY');
 
-  if (!callId || !agentId || !apiKey) {
-    console.error('Missing required parameters:', { callId, hasAgentId: !!agentId, hasApiKey: !!apiKey });
-    return response;
+  console.log('ElevenLabs stream request:', { callId, agentId: agentId?.slice(0, 10) + '...', hasApiKey: !!apiKey });
+
+  if (!callId) {
+    console.error('Missing callId parameter');
+    return new Response("Missing callId parameter", { status: 400 });
   }
+
+  if (!agentId || !apiKey) {
+    console.error('Missing ElevenLabs credentials:', { hasAgentId: !!agentId, hasApiKey: !!apiKey });
+    return new Response("Missing ElevenLabs credentials", { status: 500 });
+  }
+
+  const { socket, response } = Deno.upgradeWebSocket(req);
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
