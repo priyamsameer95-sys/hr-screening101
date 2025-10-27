@@ -6,9 +6,13 @@ serve(async (req) => {
   
   const url = new URL(req.url);
   const callId = url.searchParams.get('callId');
-  const apiKey = url.searchParams.get('apiKey');
-  const candidateName = url.searchParams.get('candidateName');
-  const position = url.searchParams.get('position');
+  const agentId = Deno.env.get('ELEVENLABS_AGENT_ID');
+  const apiKey = Deno.env.get('ELEVENLABS_API_KEY');
+
+  if (!callId || !agentId || !apiKey) {
+    console.error('Missing required parameters:', { callId, hasAgentId: !!agentId, hasApiKey: !!apiKey });
+    return response;
+  }
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
@@ -16,109 +20,104 @@ serve(async (req) => {
   );
 
   let elevenLabsWs: WebSocket | null = null;
-  let transcriptSequence = 0;
+  let conversationId: string | null = null;
 
   socket.onopen = async () => {
     console.log('Twilio WebSocket connected for call:', callId);
 
-    // Connect to ElevenLabs Conversational AI
-    const elevenLabsUrl = 'wss://api.elevenlabs.io/v1/convai/conversation';
-    elevenLabsWs = new WebSocket(elevenLabsUrl, {
-      headers: {
-        'xi-api-key': apiKey!,
-      },
-    });
+    try {
+      // Get signed URL from ElevenLabs
+      const signedUrlResponse = await fetch(
+        `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${agentId}`,
+        {
+          method: 'GET',
+          headers: {
+            'xi-api-key': apiKey,
+          },
+        }
+      );
 
-    elevenLabsWs.onopen = () => {
-      console.log('ElevenLabs WebSocket connected');
-      
-      // Configure the conversation
-      const config = {
-        type: 'conversation_initiation_client_data',
-        conversation_config_override: {
-          agent: {
-            prompt: {
-              prompt: `You are Kajal, a professional HR representative from CashKaro conducting a screening interview with ${candidateName} for the ${position} role.`,
-              llm: 'gpt-4o-mini',
-              temperature: 0.7,
-            },
-            first_message: `Hello! This is Kajal from CashKaro's HR team. Am I speaking with ${candidateName}? Great! I'm calling regarding your application for the ${position} role. This call will take about 10-15 minutes. Is this a good time to talk?`,
-            language: 'en',
-          },
-          tts: {
-            voice_id: '21m00Tcm4TlvDq8ikWAM', // Kajal's voice
-            model_id: 'eleven_turbo_v2_5',
-            optimize_streaming_latency: 3,
-          },
-          stt: {
-            provider: 'elevenlabs',
-            language: 'en',
-          },
-        },
-      };
-      
-      elevenLabsWs!.send(JSON.stringify(config));
-    };
-
-    elevenLabsWs.onmessage = async (event) => {
-      const data = JSON.parse(event.data);
-      
-      // Handle different message types
-      if (data.type === 'audio') {
-        // Forward audio from ElevenLabs to Twilio
-        socket.send(JSON.stringify({
-          event: 'media',
-          streamSid: 'stream_sid',
-          media: {
-            payload: data.audio_event.audio_base_64,
-          },
-        }));
-      } else if (data.type === 'transcript') {
-        // Save transcript to database
-        transcriptSequence++;
-        await supabase.from('transcripts').insert({
-          call_id: callId,
-          timestamp: new Date().toISOString(),
-          speaker: data.role === 'agent' ? 'AGENT' : 'CANDIDATE',
-          text: data.transcript,
-          confidence: 0.95,
-          sequence_number: transcriptSequence,
-        });
-        
-        console.log('Transcript saved:', data.role, data.transcript);
-      } else if (data.type === 'conversation_end') {
-        // Conversation ended
-        console.log('Conversation ended');
+      if (!signedUrlResponse.ok) {
+        const errorText = await signedUrlResponse.text();
+        console.error('Failed to get signed URL:', errorText);
         socket.close();
+        return;
       }
-    };
 
-    elevenLabsWs.onerror = (error) => {
-      console.error('ElevenLabs WebSocket error:', error);
-    };
+      const { signed_url } = await signedUrlResponse.json();
+      console.log('Got signed URL, connecting to ElevenLabs...');
 
-    elevenLabsWs.onclose = () => {
-      console.log('ElevenLabs WebSocket closed');
+      // Connect to ElevenLabs with signed URL
+      elevenLabsWs = new WebSocket(signed_url);
+
+      elevenLabsWs.onopen = () => {
+        console.log('ElevenLabs WebSocket connected');
+      };
+
+      elevenLabsWs.onmessage = async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          console.log('ElevenLabs message type:', data.type);
+
+          if (data.type === 'conversation_initiation_metadata') {
+            conversationId = data.conversation_id;
+            console.log('Conversation started:', conversationId);
+          } else if (data.type === 'audio' && data.audio) {
+            // Forward audio from ElevenLabs to Twilio
+            socket.send(JSON.stringify({
+              event: 'media',
+              streamSid: callId,
+              media: {
+                payload: data.audio,
+              },
+            }));
+          } else if (data.type === 'transcript' && data.transcript) {
+            // Save transcript
+            await supabase.from('transcripts').insert({
+              call_id: callId,
+              timestamp: new Date().toISOString(),
+              speaker: data.role === 'agent' ? 'AGENT' : 'CANDIDATE',
+              text: data.transcript,
+              confidence: 0.95,
+              sequence_number: Date.now(),
+            });
+            console.log('Transcript saved:', data.role, data.transcript);
+          } else if (data.type === 'interruption') {
+            console.log('User interrupted');
+          } else if (data.type === 'ping') {
+            elevenLabsWs?.send(JSON.stringify({ type: 'pong', event_id: data.event_id }));
+          }
+        } catch (error) {
+          console.error('Error processing ElevenLabs message:', error);
+        }
+      };
+
+      elevenLabsWs.onerror = (error) => {
+        console.error('ElevenLabs WebSocket error:', error);
+      };
+
+      elevenLabsWs.onclose = () => {
+        console.log('ElevenLabs WebSocket closed');
+        socket.close();
+      };
+    } catch (error) {
+      console.error('Error setting up ElevenLabs connection:', error);
       socket.close();
-    };
+    }
   };
 
   socket.onmessage = (event) => {
     try {
       const message = JSON.parse(event.data);
       
-      if (message.event === 'media' && elevenLabsWs?.readyState === WebSocket.OPEN) {
+      if (message.event === 'start') {
+        console.log('Twilio stream started');
+      } else if (message.event === 'media' && elevenLabsWs?.readyState === WebSocket.OPEN) {
         // Forward audio from Twilio to ElevenLabs
         elevenLabsWs.send(JSON.stringify({
-          type: 'audio',
-          audio_event: {
-            audio_base_64: message.media.payload,
-            encoding: 'mulaw',
-            sample_rate: 8000,
-          },
+          user_audio_chunk: message.media.payload,
         }));
       } else if (message.event === 'stop') {
-        // Call ended
         console.log('Twilio stream stopped');
         elevenLabsWs?.close();
       }
@@ -139,6 +138,13 @@ serve(async (req) => {
         ended_at: new Date().toISOString(),
       })
       .eq('id', callId);
+
+    // Trigger analysis
+    if (conversationId) {
+      await supabase.functions.invoke('analyze-response', {
+        body: { callId },
+      });
+    }
   };
 
   socket.onerror = (error) => {
