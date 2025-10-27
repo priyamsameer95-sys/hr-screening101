@@ -34,6 +34,7 @@ serve(async (req) => {
 
   let elevenLabsWs: WebSocket | null = null;
   let conversationId: string | null = null;
+  let twilioStreamSid: string | null = null;
 
   socket.onopen = async () => {
     console.log('Twilio WebSocket connected for call:', callId);
@@ -76,14 +77,18 @@ serve(async (req) => {
             conversationId = data.conversation_id;
             console.log('Conversation started:', conversationId);
           } else if (data.type === 'audio' && data.audio) {
-            // Forward audio from ElevenLabs to Twilio
-            socket.send(JSON.stringify({
-              event: 'media',
-              streamSid: callId,
-              media: {
-                payload: data.audio,
-              },
-            }));
+            // Forward audio from ElevenLabs to Twilio using the correct Twilio streamSid
+            if (!twilioStreamSid) {
+              console.warn('Cannot send audio to Twilio: streamSid not set yet');
+            } else {
+              socket.send(JSON.stringify({
+                event: 'media',
+                streamSid: twilioStreamSid,
+                media: {
+                  payload: data.audio,
+                },
+              }));
+            }
           } else if (data.type === 'transcript' && data.transcript) {
             // Save transcript
             await supabase.from('transcripts').insert({
@@ -124,7 +129,8 @@ serve(async (req) => {
       const message = JSON.parse(event.data);
       
       if (message.event === 'start') {
-        console.log('Twilio stream started');
+        twilioStreamSid = message.start?.streamSid || null;
+        console.log('Twilio stream started. streamSid:', twilioStreamSid);
       } else if (message.event === 'media' && elevenLabsWs?.readyState === WebSocket.OPEN) {
         // Forward audio from Twilio to ElevenLabs
         elevenLabsWs.send(JSON.stringify({
