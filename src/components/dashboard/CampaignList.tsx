@@ -8,11 +8,11 @@ interface Campaign {
   id: string;
   name: string;
   position: string;
-  status: "active" | "paused" | "completed";
-  totalCandidates: number;
-  completedCalls: number;
-  successRate: number;
-  createdAt: string;
+  status: string;
+  total_candidates: number;
+  completed_calls: number;
+  successful_calls: number;
+  created_at: string;
 }
 
 interface CampaignListProps {
@@ -20,22 +20,27 @@ interface CampaignListProps {
 }
 
 const CampaignList = ({ campaigns }: CampaignListProps) => {
-  const getStatusBadge = (status: Campaign["status"]) => {
-    const variants = {
-      active: "bg-success text-success-foreground",
-      paused: "bg-warning text-warning-foreground",
-      completed: "bg-muted text-muted-foreground",
+  const getStatusBadge = (status: string) => {
+    const variants: Record<string, string> = {
+      ACTIVE: "bg-success text-success-foreground",
+      PAUSED: "bg-warning text-warning-foreground",
+      COMPLETED: "bg-muted text-muted-foreground",
+      DRAFT: "bg-muted text-muted-foreground",
     };
 
     return (
-      <Badge className={variants[status]}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
+      <Badge className={variants[status] || "bg-muted text-muted-foreground"}>
+        {status.charAt(0) + status.slice(1).toLowerCase()}
       </Badge>
     );
   };
 
   const getProgress = (completed: number, total: number) => {
-    return (completed / total) * 100;
+    return total > 0 ? (completed / total) * 100 : 0;
+  };
+
+  const getSuccessRate = (successful: number, completed: number) => {
+    return completed > 0 ? Math.round((successful / completed) * 100) : 0;
   };
 
   if (campaigns.length === 0) {
@@ -70,17 +75,17 @@ const CampaignList = ({ campaigns }: CampaignListProps) => {
                 Position: {campaign.position}
               </p>
               <p className="text-xs text-muted-foreground">
-                Created: {new Date(campaign.createdAt).toLocaleDateString()}
+                Created: {new Date(campaign.created_at).toLocaleDateString()}
               </p>
             </div>
             <div className="flex gap-2">
-              {campaign.status === "active" && (
+              {campaign.status === "ACTIVE" && (
                 <Button size="sm" variant="outline">
                   <Pause className="h-4 w-4 mr-1" />
                   Pause
                 </Button>
               )}
-              {campaign.status === "paused" && (
+              {campaign.status === "PAUSED" && (
                 <Button size="sm" className="bg-gradient-primary">
                   <Play className="h-4 w-4 mr-1" />
                   Resume
@@ -100,15 +105,17 @@ const CampaignList = ({ campaigns }: CampaignListProps) => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-4">
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Total Candidates</p>
-              <p className="text-2xl font-bold">{campaign.totalCandidates}</p>
+              <p className="text-2xl font-bold">{campaign.total_candidates || 0}</p>
             </div>
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Completed Calls</p>
-              <p className="text-2xl font-bold">{campaign.completedCalls}</p>
+              <p className="text-2xl font-bold">{campaign.completed_calls || 0}</p>
             </div>
             <div className="space-y-1">
               <p className="text-sm text-muted-foreground">Success Rate</p>
-              <p className="text-2xl font-bold">{campaign.successRate}%</p>
+              <p className="text-2xl font-bold">
+                {getSuccessRate(campaign.successful_calls || 0, campaign.completed_calls || 0)}%
+              </p>
             </div>
           </div>
 
@@ -116,11 +123,11 @@ const CampaignList = ({ campaigns }: CampaignListProps) => {
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">Progress</span>
               <span className="font-medium">
-                {campaign.completedCalls} / {campaign.totalCandidates}
+                {campaign.completed_calls || 0} / {campaign.total_candidates || 0}
               </span>
             </div>
             <Progress 
-              value={getProgress(campaign.completedCalls, campaign.totalCandidates)} 
+              value={getProgress(campaign.completed_calls || 0, campaign.total_candidates || 0)} 
               className="h-2"
             />
           </div>

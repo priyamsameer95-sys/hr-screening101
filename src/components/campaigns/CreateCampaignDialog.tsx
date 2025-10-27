@@ -19,9 +19,13 @@ import {
 } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, ChevronRight, ChevronLeft } from "lucide-react";
+import { CalendarIcon, ChevronRight, ChevronLeft, Loader2 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
+import { useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/hooks/useAuth";
 
 interface CreateCampaignDialogProps {
   open: boolean;
@@ -30,6 +34,10 @@ interface CreateCampaignDialogProps {
 
 const CreateCampaignDialog = ({ open, onOpenChange }: CreateCampaignDialogProps) => {
   const [step, setStep] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [formData, setFormData] = useState({
     name: "",
     position: "",
@@ -50,10 +58,74 @@ const CreateCampaignDialog = ({ open, onOpenChange }: CreateCampaignDialogProps)
     setStep((prev) => Math.max(prev - 1, 1));
   };
 
-  const handleCreate = () => {
-    console.log("Creating campaign:", formData);
-    onOpenChange(false);
-    setStep(1);
+  const handleCreate = async () => {
+    if (!user) return;
+    
+    setLoading(true);
+    try {
+      // Get the selected template
+      const { data: templates } = await supabase
+        .from("question_templates")
+        .select("id")
+        .eq("name", formData.template === "software" ? "Software Engineer" : 
+                     formData.template === "marketing" ? "Marketing Manager" : 
+                     "Sales Executive")
+        .single();
+
+      // Create campaign
+      const { data: campaign, error } = await supabase
+        .from("campaigns")
+        .insert({
+          name: formData.name,
+          position: formData.position,
+          description: formData.description || null,
+          scheduled_start: formData.startDate?.toISOString(),
+          scheduled_end: formData.endDate?.toISOString(),
+          question_template_id: templates?.id,
+          status: "DRAFT",
+          created_by: user.id,
+          retry_policy: {
+            maxAttempts: parseInt(formData.maxAttempts),
+            intervalHours: [0, 4, 24],
+          },
+          voice_settings: {
+            voiceId: formData.voice === "kajal" ? "21m00Tcm4TlvDq8ikWAM" : "other_voice_id",
+            language: formData.language,
+          },
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      toast({
+        title: "Campaign created!",
+        description: "Your campaign has been created successfully. Now upload candidates to start.",
+      });
+
+      queryClient.invalidateQueries({ queryKey: ["campaigns"] });
+      onOpenChange(false);
+      setStep(1);
+      setFormData({
+        name: "",
+        position: "",
+        description: "",
+        startDate: undefined,
+        endDate: undefined,
+        template: "",
+        maxAttempts: "3",
+        voice: "kajal",
+        language: "en",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -318,8 +390,19 @@ const CreateCampaignDialog = ({ open, onOpenChange }: CreateCampaignDialogProps)
               <ChevronRight className="h-4 w-4 ml-1" />
             </Button>
           ) : (
-            <Button onClick={handleCreate} className="bg-gradient-primary">
-              Create Campaign
+            <Button 
+              onClick={handleCreate} 
+              className="bg-gradient-primary"
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Campaign"
+              )}
             </Button>
           )}
         </div>
