@@ -19,6 +19,25 @@ serve(async (req) => {
 
     const { callId } = await req.json();
 
+    // Get call and candidate details
+    const { data: call } = await supabase
+      .from('calls')
+      .select(`
+        *,
+        candidate:candidates(
+          *,
+          campaign:campaigns(*)
+        )
+      `)
+      .eq('id', callId)
+      .single();
+
+    if (!call) {
+      throw new Error('Call not found');
+    }
+
+    const candidate = call.candidate;
+
     // Get full transcript
     const { data: transcripts } = await supabase
       .from('transcripts')
@@ -31,64 +50,81 @@ serve(async (req) => {
     }
 
     // Combine transcripts into conversation
-    const conversation = transcripts.map(t => 
+    const transcript = transcripts.map(t => 
       `${t.speaker}: ${t.text}`
     ).join('\n');
 
-    // Use OpenAI to extract structured data
-    const ELEVENLABS_API_KEY = Deno.env.get('ELEVENLABS_API_KEY');
+    // Analyze with Lovable AI
+    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     
-    const analysisPrompt = `Analyze this HR screening call transcript and extract structured information:
+    const aiPrompt = `Analyze this recruitment screening call and extract structured information:
 
-${conversation}
+Candidate: ${candidate.full_name}
+Position: ${candidate.position}
+Current Company: ${candidate.current_company || 'N/A'}
+Experience: ${candidate.years_experience || 'N/A'} years
 
-Extract the following information:
-1. Notice Period (days/months)
-2. Current CTC (salary)
-3. Expected CTC (salary)
-4. Reason for job change
-5. Key skills mentioned
-6. Years of experience
-7. Current company
-8. Availability for interviews
-9. Any red flags or concerns
-10. Overall engagement score (1-10)
-11. Qualification score (1-10)
-12. Recommendation (PROCEED/REJECT/MAYBE)
+TRANSCRIPT:
+${transcript}
 
-Return as JSON with these exact fields.`;
+Extract and return a JSON object with these exact fields:
+{
+  "notice_period": "number of days or months",
+  "current_ctc": "current salary",
+  "expected_ctc": "expected salary", 
+  "reason_for_change": "brief reason",
+  "key_skills": ["skill1", "skill2"],
+  "years_experience": number,
+  "current_company": "company name",
+  "availability": "availability info",
+  "engagement_score": number (1-10),
+  "qualification_score": number (1-10),
+  "recommendation": "PROCEED|REJECT|MAYBE",
+  "red_flags": ["flag1", "flag2"] or [],
+  "reasoning": "brief explanation"
+}`;
 
-    const response = await fetch('https://api.elevenlabs.io/v1/text-to-text', {
+    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'xi-api-key': ELEVENLABS_API_KEY!,
+        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'google/gemini-2.5-flash',
         messages: [
-          { role: 'system', content: 'You are an AI assistant that analyzes HR screening calls.' },
-          { role: 'user', content: analysisPrompt },
+          { role: 'system', content: 'You are an expert HR analyst. Extract structured information from call transcripts and return valid JSON only.' },
+          { role: 'user', content: aiPrompt }
         ],
-        response_format: { type: 'json_object' },
       }),
     });
 
-    const aiResponse = await response.json();
-    const analysis = JSON.parse(aiResponse.choices[0].message.content);
+    if (!aiResponse.ok) {
+      const errorText = await aiResponse.text();
+      console.error('AI analysis failed:', errorText);
+      throw new Error(`AI analysis failed: ${errorText}`);
+    }
+
+    const aiData = await aiResponse.json();
+    const analysisText = aiData.choices[0].message.content;
+    
+    // Parse the JSON from the AI response
+    const analysis = JSON.parse(analysisText.replace(/```json\n?|\n?```/g, ''));
 
     // Save AI recommendation
     await supabase.from('ai_recommendations').insert({
       call_id: callId,
       recommendation: analysis.recommendation,
-      reasoning: analysis.reason_for_change || 'See full transcript',
+      reasoning: analysis.reasoning || 'See full transcript',
       engagement_score: analysis.engagement_score,
       qualification_score: analysis.qualification_score,
       red_flags: analysis.red_flags || [],
       strengths: analysis.key_skills || [],
       suggested_next_steps: analysis.recommendation === 'PROCEED' 
-        ? 'Schedule technical interview within 1 week'
-        : 'Review transcript and reconsider',
+        ? ['Schedule technical interview', 'Send assessment link']
+        : analysis.recommendation === 'MAYBE'
+        ? ['Review transcript in detail', 'Consult with hiring manager']
+        : ['Send rejection email', 'Add to talent pool for future roles'],
     });
 
     // Save structured responses
@@ -107,7 +143,7 @@ Return as JSON with these exact fields.`;
       call_id: callId,
       question_id: null,
       question_text: 'Full Interview Analysis',
-      raw_response: conversation,
+      raw_response: transcript,
       extracted_value: responseData,
       confidence_score: 0.85,
       red_flags: analysis.red_flags || [],
