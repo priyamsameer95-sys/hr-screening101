@@ -166,14 +166,16 @@ const CandidateUpload = ({ campaignId, onUploadComplete }: CandidateUploadProps)
 
     setUploading(true);
     try {
-      const { error } = await supabase.from("candidates").insert(
-        validCandidates.map(c => ({
+      // Remove validation fields before inserting
+      const candidatesToInsert = validCandidates.map(c => {
+        const { validation_status, validation_message, ...candidateData } = c;
+        return {
           campaign_id: campaignId,
-          ...c,
-          validation_status: undefined,
-          validation_message: undefined,
-        }))
-      );
+          ...candidateData,
+        };
+      });
+
+      const { error } = await supabase.from("candidates").insert(candidatesToInsert);
 
       if (error) throw error;
 
