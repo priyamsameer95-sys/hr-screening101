@@ -75,7 +75,10 @@ const Index = () => {
                 <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
                   HR Screening AI
                 </h1>
-                <p className="text-sm text-muted-foreground">Powered by Kajal</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm text-muted-foreground">Powered by</p>
+                  <span className="text-sm font-semibold text-foreground">ElevenLabs</span>
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-3">
