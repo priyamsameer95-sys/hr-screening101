@@ -37,7 +37,40 @@ const Index = () => {
     enabled: !!user,
   });
 
+  // Fetch all calls for calculating average duration
+  const { data: calls = [] } = useQuery({
+    queryKey: ["calls", user?.id],
+    queryFn: async () => {
+      if (!user?.id) return [];
+      const { data, error } = await supabase
+        .from("calls")
+        .select(`
+          id,
+          duration_seconds,
+          status,
+          candidate_id,
+          candidates!inner (
+            campaign_id,
+            campaigns!inner (
+              created_by
+            )
+          )
+        `)
+        .eq("candidates.campaigns.created_by", user.id);
+      
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!user?.id,
+  });
+
   // Calculate stats from real data
+  const completedCalls = calls.filter(call => call.duration_seconds && call.duration_seconds > 0);
+  const totalDuration = completedCalls.reduce((sum, call) => sum + (call.duration_seconds || 0), 0);
+  const avgDurationSeconds = completedCalls.length > 0 ? Math.round(totalDuration / completedCalls.length) : 0;
+  const avgMinutes = Math.floor(avgDurationSeconds / 60);
+  const avgSeconds = avgDurationSeconds % 60;
+  
   const stats = {
     totalCalls: campaigns.reduce((sum, c) => sum + (c.total_candidates || 0), 0),
     completedCalls: campaigns.reduce((sum, c) => sum + (c.completed_calls || 0), 0),
@@ -48,7 +81,9 @@ const Index = () => {
             100
         )
       : 0,
-    avgCallDuration: "12:34", // This would need call data
+    avgCallDuration: completedCalls.length > 0 
+      ? `${avgMinutes}:${avgSeconds.toString().padStart(2, '0')}`
+      : "0:00",
   };
 
   if (authLoading || campaignsLoading) {

@@ -38,7 +38,7 @@ const DashboardStats = ({ stats }: DashboardStatsProps) => {
       value: stats.avgCallDuration,
       icon: Clock,
       gradient: "from-warning to-yellow-400",
-      change: "-2 min from last month",
+      change: stats.avgCallDuration !== "0:00" ? "Based on completed calls" : "No calls yet",
     },
   ];
 
