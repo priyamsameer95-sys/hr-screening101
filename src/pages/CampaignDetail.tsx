@@ -64,12 +64,15 @@ const CampaignDetail = () => {
 
       if (error) throw error;
 
-      // Initiate calls for all pending candidates
-      for (const candidate of candidates.filter(c => c.status === "PENDING")) {
-        await supabase.functions.invoke("initiate-call", {
-          body: { candidateId: candidate.id },
-        });
-      }
+      // Initiate calls for PENDING or SCHEDULED candidates in parallel
+      const toCall = candidates.filter(c => ["PENDING", "SCHEDULED"].includes(c.status));
+      await Promise.all(
+        toCall.map((candidate) =>
+          supabase.functions.invoke("initiate-call", {
+            body: { candidateId: candidate.id },
+          })
+        )
+      );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["campaign", id] });
