@@ -18,6 +18,7 @@ serve(async (req) => {
     );
 
     const { candidateId } = await req.json();
+    console.log('Initiating call for candidate:', candidateId);
 
     // Get candidate details
     const { data: candidate, error: candidateError } = await supabase
@@ -36,8 +37,15 @@ serve(async (req) => {
       .single();
 
     if (candidateError || !candidate) {
+      console.error('Candidate fetch error:', candidateError);
       throw new Error('Candidate not found');
     }
+
+    console.log('Candidate found:', {
+      name: candidate.full_name,
+      phone: candidate.phone_number,
+      status: candidate.status
+    });
 
     // Update candidate status
     await supabase
@@ -56,15 +64,42 @@ serve(async (req) => {
       .select()
       .single();
 
-    if (callError) throw callError;
+    if (callError) {
+      console.error('Call record creation error:', callError);
+      throw callError;
+    }
+
+    console.log('Call record created:', call.id);
 
     // Initiate Twilio call
     const TWILIO_ACCOUNT_SID = Deno.env.get('TWILIO_ACCOUNT_SID');
     const TWILIO_AUTH_TOKEN = Deno.env.get('TWILIO_AUTH_TOKEN');
     const TWILIO_PHONE_NUMBER = Deno.env.get('TWILIO_PHONE_NUMBER');
-    const BASE_URL = Deno.env.get('SUPABASE_URL')?.replace('https://', 'https://');
+    const BASE_URL = Deno.env.get('SUPABASE_URL');
+
+    if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_PHONE_NUMBER) {
+      throw new Error('Missing Twilio credentials');
+    }
+
+    console.log('Twilio config:', {
+      accountSid: TWILIO_ACCOUNT_SID?.substring(0, 10) + '...',
+      from: TWILIO_PHONE_NUMBER,
+      to: candidate.phone_number
+    });
 
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
+    
+    const twilioParams = new URLSearchParams({
+      To: candidate.phone_number, // Phone number with country code (e.g., +919058010369)
+      From: TWILIO_PHONE_NUMBER,
+      Url: `${BASE_URL}/functions/v1/handle-twilio-call?callId=${call.id}`,
+      StatusCallback: `${BASE_URL}/functions/v1/twilio-status`,
+      StatusCallbackEvent: 'completed',
+      Record: 'true',
+      RecordingStatusCallback: `${BASE_URL}/functions/v1/twilio-recording`,
+    });
+
+    console.log('Making Twilio API call...');
     
     const twilioResponse = await fetch(twilioUrl, {
       method: 'POST',
@@ -72,23 +107,21 @@ serve(async (req) => {
         'Authorization': 'Basic ' + btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`),
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams({
-        To: candidate.phone_number,
-        From: TWILIO_PHONE_NUMBER!,
-        Url: `${BASE_URL}/functions/v1/handle-twilio-call?callId=${call.id}`,
-        StatusCallback: `${BASE_URL}/functions/v1/twilio-status`,
-        StatusCallbackEvent: 'completed',
-        Record: 'true',
-        RecordingStatusCallback: `${BASE_URL}/functions/v1/twilio-recording`,
-      }).toString(),
+      body: twilioParams.toString(),
     });
 
+    const twilioResponseText = await twilioResponse.text();
+    
     if (!twilioResponse.ok) {
-      const error = await twilioResponse.text();
-      throw new Error(`Twilio error: ${error}`);
+      console.error('Twilio API error:', {
+        status: twilioResponse.status,
+        response: twilioResponseText
+      });
+      throw new Error(`Twilio error: ${twilioResponseText}`);
     }
 
-    const twilioCall = await twilioResponse.json();
+    const twilioCall = JSON.parse(twilioResponseText);
+    console.log('Twilio call created:', twilioCall.sid);
 
     // Update call with Twilio SID
     await supabase
@@ -100,9 +133,11 @@ serve(async (req) => {
       })
       .eq('id', call.id);
 
-    console.log('Call initiated:', {
+    console.log('Call initiated successfully:', {
       callId: call.id,
       candidateId,
+      candidateName: candidate.full_name,
+      phoneNumber: candidate.phone_number,
       twilioSid: twilioCall.sid,
     });
 
@@ -110,14 +145,22 @@ serve(async (req) => {
       JSON.stringify({ 
         success: true, 
         callId: call.id,
-        twilioSid: twilioCall.sid 
+        twilioSid: twilioCall.sid,
+        candidateName: candidate.full_name,
+        phoneNumber: candidate.phone_number
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   } catch (error) {
     console.error('Error initiating call:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error details:', errorMessage);
+    
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
+      JSON.stringify({ 
+        success: false,
+        error: errorMessage 
+      }),
       { 
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
