@@ -1,8 +1,9 @@
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Play, Pause, FileText, Upload, Users } from "lucide-react";
+import { Play, Pause, FileText, Upload, Users, Eye } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 interface Campaign {
   id: string;
@@ -20,6 +21,7 @@ interface CampaignListProps {
 }
 
 const CampaignList = ({ campaigns }: CampaignListProps) => {
+  const navigate = useNavigate();
   const getStatusBadge = (status: string) => {
     const variants: Record<string, string> = {
       ACTIVE: "bg-success text-success-foreground",
@@ -79,6 +81,10 @@ const CampaignList = ({ campaigns }: CampaignListProps) => {
               </p>
             </div>
             <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => navigate(`/campaign/${campaign.id}`)}>
+                <Eye className="h-4 w-4 mr-1" />
+                View
+              </Button>
               {campaign.status === "ACTIVE" && (
                 <Button size="sm" variant="outline">
                   <Pause className="h-4 w-4 mr-1" />

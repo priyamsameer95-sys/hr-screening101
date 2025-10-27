@@ -3,8 +3,15 @@ project_id = "kipvbsaroymehobtalsy"
 [functions.initiate-call]
 verify_jwt = true
 
-[functions.process-transcript]
-verify_jwt = true
+[functions.handle-twilio-call]
+verify_jwt = false
+
+[functions.elevenlabs-stream]
+verify_jwt = false
 
 [functions.analyze-response]
 verify_jwt = true
+
+[functions.twilio-status]
+verify_jwt = false
+
