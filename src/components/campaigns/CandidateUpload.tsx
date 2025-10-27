@@ -52,6 +52,17 @@ const CandidateUpload = ({ campaignId, onUploadComplete }: CandidateUploadProps)
     ];
 
     const ws = XLSX.utils.json_to_sheet(template);
+    
+    // Format phone number column as text to prevent scientific notation
+    const phoneCol = 'B'; // Phone Number is column B
+    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+    for (let row = range.s.r; row <= range.e.r; row++) {
+      const cellAddress = phoneCol + (row + 1);
+      if (ws[cellAddress]) {
+        ws[cellAddress].z = '@'; // '@' is the format code for text
+      }
+    }
+    
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Candidates");
     XLSX.writeFile(wb, "candidate_template.xlsx");
@@ -73,9 +84,34 @@ const CandidateUpload = ({ campaignId, onUploadComplete }: CandidateUploadProps)
       const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
       const parsedCandidates: CandidateRow[] = jsonData.map((row: any) => {
+        // Handle phone number - convert scientific notation to string
+        let phoneNumber = "";
+        if (row["Phone Number"]) {
+          if (typeof row["Phone Number"] === "number") {
+            // Convert number to string without scientific notation
+            const numStr = row["Phone Number"].toFixed(0);
+            // If it starts with 91 and has 12 digits, format it properly
+            if (numStr.length === 12 && numStr.startsWith("91")) {
+              phoneNumber = "+" + numStr;
+            } else if (numStr.length === 10) {
+              // 10 digit number, add +91
+              phoneNumber = "+91" + numStr;
+            } else {
+              // Just add + if not present
+              phoneNumber = numStr.startsWith("+") ? numStr : "+" + numStr;
+            }
+          } else {
+            phoneNumber = row["Phone Number"].toString().trim();
+            // Ensure it has + prefix
+            if (!phoneNumber.startsWith("+")) {
+              phoneNumber = "+" + phoneNumber;
+            }
+          }
+        }
+
         const candidate: CandidateRow = {
           full_name: row["Full Name"] || "",
-          phone_number: row["Phone Number"] || "",
+          phone_number: phoneNumber,
           email: row["Email"] || "",
           position: row["Position"] || "",
           preferred_call_time: row["Preferred Call Time"],
