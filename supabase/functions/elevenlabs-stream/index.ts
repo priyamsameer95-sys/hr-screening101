@@ -1,10 +1,19 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+console.log('🚀 ElevenLabs stream function started');
+
 serve(async (req) => {
+  console.log('📞 Incoming request:', { 
+    method: req.method, 
+    url: req.url,
+    headers: Object.fromEntries(req.headers.entries())
+  });
+
   const upgradeHeader = req.headers.get("upgrade") || "";
   
   if (upgradeHeader.toLowerCase() !== "websocket") {
+    console.error('❌ Not a WebSocket request. Upgrade header:', upgradeHeader);
     return new Response("Expected WebSocket connection", { status: 400 });
   }
 
@@ -13,7 +22,12 @@ serve(async (req) => {
   const agentId = Deno.env.get('ELEVENLABS_AGENT_ID');
   const apiKey = Deno.env.get('ELEVENLABS_API_KEY');
 
-  console.log('ElevenLabs stream request:', { callId, agentId: agentId?.slice(0, 10) + '...', hasApiKey: !!apiKey });
+  console.log('🔑 ElevenLabs credentials check:', { 
+    callId, 
+    agentId: agentId ? agentId.slice(0, 15) + '...' : 'MISSING',
+    hasApiKey: !!apiKey,
+    apiKeyLength: apiKey?.length || 0
+  });
 
   if (!callId) {
     console.error('Missing callId parameter');

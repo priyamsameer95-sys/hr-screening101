@@ -89,11 +89,21 @@ serve(async (req) => {
 
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
     
+    const callbackUrl = `${BASE_URL}/functions/v1/handle-twilio-call?callId=${call.id}`;
+    const statusCallbackUrl = `${BASE_URL}/functions/v1/twilio-status`;
+    
+    console.log('📞 Twilio Webhook URLs (verify these are accessible):', {
+      callbackUrl,
+      statusCallbackUrl,
+      statusEvents: 'initiated, ringing, answered, completed, busy, no-answer, failed',
+      note: 'These URLs will receive webhook calls from Twilio'
+    });
+    
     const twilioParams = new URLSearchParams({
       To: candidate.phone_number,
       From: TWILIO_PHONE_NUMBER,
-      Url: `${BASE_URL}/functions/v1/handle-twilio-call?callId=${call.id}`,
-      StatusCallback: `${BASE_URL}/functions/v1/twilio-status`,
+      Url: callbackUrl,
+      StatusCallback: statusCallbackUrl,
       StatusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed', 'busy', 'no-answer', 'failed'].join(' '),
       StatusCallbackMethod: 'POST',
       Record: 'true',
