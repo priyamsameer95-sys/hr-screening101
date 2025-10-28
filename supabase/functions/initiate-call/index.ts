@@ -104,7 +104,7 @@ serve(async (req) => {
       From: TWILIO_PHONE_NUMBER,
       Url: callbackUrl,
       StatusCallback: statusCallbackUrl,
-      StatusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed', 'busy', 'no-answer', 'failed'].join(' '),
+      StatusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed', 'busy', 'no-answer', 'failed', 'canceled'].join(' '),
       StatusCallbackMethod: 'POST',
       Record: 'true',
       RecordingStatusCallback: `${BASE_URL}/functions/v1/twilio-recording`,

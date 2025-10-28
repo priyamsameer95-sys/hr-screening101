@@ -15,9 +15,11 @@ verify_jwt = true
 [functions.twilio-status]
 verify_jwt = false
 
+[functions.twilio-recording]
+verify_jwt = false
+
 [functions.export-results]
 verify_jwt = true
 
 [functions.cleanup-stale-calls]
 verify_jwt = false
-
