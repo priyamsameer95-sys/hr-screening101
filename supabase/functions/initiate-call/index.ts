@@ -90,11 +90,12 @@ serve(async (req) => {
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls.json`;
     
     const twilioParams = new URLSearchParams({
-      To: candidate.phone_number, // Phone number with country code (e.g., +919058010369)
+      To: candidate.phone_number,
       From: TWILIO_PHONE_NUMBER,
       Url: `${BASE_URL}/functions/v1/handle-twilio-call?callId=${call.id}`,
       StatusCallback: `${BASE_URL}/functions/v1/twilio-status`,
-      StatusCallbackEvent: 'completed',
+      StatusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed', 'busy', 'no-answer', 'failed'].join(' '),
+      StatusCallbackMethod: 'POST',
       Record: 'true',
       RecordingStatusCallback: `${BASE_URL}/functions/v1/twilio-recording`,
     });

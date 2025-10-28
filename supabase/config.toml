@@ -15,3 +15,6 @@ verify_jwt = true
 [functions.twilio-status]
 verify_jwt = false
 
+[functions.export-results]
+verify_jwt = true
+
