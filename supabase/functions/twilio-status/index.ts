@@ -38,10 +38,20 @@ serve(async (req) => {
       updateData.ended_at = new Date().toISOString();
     }
 
-    await supabase
+    const { data: updatedCall } = await supabase
       .from('calls')
       .update(updateData)
-      .eq('call_sid', callSid);
+      .eq('call_sid', callSid)
+      .select('id')
+      .single();
+
+    console.log('📞 Twilio status webhook:', { 
+      callSid: callSid?.toString().substring(0, 10) + '...', 
+      twilioStatus: callStatus, 
+      mappedStatus: ourStatus,
+      duration: callDuration,
+      callId: updatedCall?.id 
+    });
 
     // If call completed, trigger analysis
     if (ourStatus === 'COMPLETED') {
@@ -52,6 +62,7 @@ serve(async (req) => {
         .single();
 
       if (call) {
+        console.log('🔍 Triggering analysis for completed call:', call.id);
         // Trigger analysis function
         await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/analyze-response`, {
           method: 'POST',
@@ -63,8 +74,6 @@ serve(async (req) => {
         });
       }
     }
-
-    console.log('Twilio status update:', { callSid, callStatus, ourStatus });
 
     return new Response('OK', { status: 200 });
   } catch (error) {

@@ -51,13 +51,15 @@ serve(async (req) => {
     console.log('Generating TwiML with stream URL:', streamUrl);
     console.log('Call ID being passed:', callId);
 
-    // Generate TwiML to connect to ElevenLabs via WebSocket
+    // Generate TwiML to connect to ElevenLabs via WebSocket (bidirectional audio)
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${streamUrl}" />
+    <Stream url="${streamUrl}" track="both_tracks" />
   </Connect>
 </Response>`;
+
+    console.log('TwiML generated with track="both_tracks" for bidirectional audio');
 
     console.log('TwiML generated successfully');
 

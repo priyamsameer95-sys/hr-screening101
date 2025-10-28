@@ -35,6 +35,9 @@ serve(async (req) => {
   let elevenLabsWs: WebSocket | null = null;
   let conversationId: string | null = null;
   let twilioStreamSid: string | null = null;
+  let audioQueue: any[] = []; // Buffer audio until twilioStreamSid is established
+  let mediaInCount = 0;
+  let audioOutCount = 0;
 
   socket.onopen = async () => {
     console.log('Twilio WebSocket connected for call:', callId);
@@ -106,16 +109,25 @@ serve(async (req) => {
       elevenLabsWs.onopen = () => {
         console.log('ElevenLabs WebSocket connected');
         
-        // Send custom configuration to override agent prompt
+        // Send custom configuration with Twilio-compatible audio format (ulaw_8000)
         const configMessage = {
           type: 'conversation_initiation_client_data',
           custom_llm_extra_body: {
             system_prompt: dynamicPrompt
+          },
+          conversation_config_override: {
+            tts: {
+              audio_format: 'ulaw_8000'
+            },
+            asr: {
+              quality: 'high',
+              input_audio_format: 'ulaw_8000'
+            }
           }
         };
         
         elevenLabsWs?.send(JSON.stringify(configMessage));
-        console.log('Sent dynamic prompt to ElevenLabs agent');
+        console.log('Sent dynamic prompt + audio format (ulaw_8000) to ElevenLabs agent');
         
         // Update call status to IN_PROGRESS
         supabase
@@ -137,10 +149,29 @@ serve(async (req) => {
             conversationId = data.conversation_id;
             console.log('Conversation started:', conversationId);
           } else if (data.type === 'audio' && data.audio) {
+            audioOutCount++;
+            const audioPreview = data.audio.substring(0, 4);
+            console.log(`EL audio out #${audioOutCount}, preview: ${audioPreview}`);
+            
             // Forward audio from ElevenLabs to Twilio using the correct Twilio streamSid
             if (!twilioStreamSid) {
-              console.warn('Cannot send audio to Twilio: streamSid not set yet');
+              console.log('Buffering audio - streamSid not set yet');
+              audioQueue.push(data.audio);
             } else {
+              // Flush queue if any buffered audio
+              if (audioQueue.length > 0) {
+                console.log(`Flushing ${audioQueue.length} buffered audio chunks`);
+                audioQueue.forEach(audio => {
+                  socket.send(JSON.stringify({
+                    event: 'media',
+                    streamSid: twilioStreamSid,
+                    media: { payload: audio },
+                  }));
+                });
+                audioQueue = [];
+              }
+              
+              // Send current audio
               socket.send(JSON.stringify({
                 event: 'media',
                 streamSid: twilioStreamSid,
@@ -159,7 +190,8 @@ serve(async (req) => {
               confidence: 0.95,
               sequence_number: Date.now(),
             });
-            console.log('Transcript saved:', data.role, data.transcript);
+            const transcriptPreview = data.transcript.substring(0, 50);
+            console.log(`EL transcript (${data.role}): ${transcriptPreview}...`);
           } else if (data.type === 'interruption') {
             console.log('User interrupted');
           } else if (data.type === 'ping') {
@@ -190,8 +222,25 @@ serve(async (req) => {
       
       if (message.event === 'start') {
         twilioStreamSid = message.start?.streamSid || null;
-        console.log('Twilio stream started. streamSid:', twilioStreamSid);
+        console.log('✓ Twilio stream started. streamSid:', twilioStreamSid);
+        
+        // Flush any buffered audio now that we have streamSid
+        if (audioQueue.length > 0) {
+          console.log(`Flushing ${audioQueue.length} buffered audio chunks on stream start`);
+          audioQueue.forEach(audio => {
+            socket.send(JSON.stringify({
+              event: 'media',
+              streamSid: twilioStreamSid,
+              media: { payload: audio },
+            }));
+          });
+          audioQueue = [];
+        }
       } else if (message.event === 'media' && elevenLabsWs?.readyState === WebSocket.OPEN) {
+        mediaInCount++;
+        if (mediaInCount % 50 === 0) {
+          console.log(`Twilio media in: ${mediaInCount} chunks received`);
+        }
         // Forward audio from Twilio to ElevenLabs
         elevenLabsWs.send(JSON.stringify({
           user_audio_chunk: message.media.payload,
