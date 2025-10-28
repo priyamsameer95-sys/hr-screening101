@@ -40,7 +40,7 @@ serve(async (req) => {
   let audioOutCount = 0;
 
   socket.onopen = async () => {
-    console.log('Twilio WebSocket connected for call:', callId);
+    console.log('✓ Twilio WebSocket connected for call:', callId);
 
     try {
       // Fetch call details with campaign and questions
@@ -107,27 +107,19 @@ serve(async (req) => {
       elevenLabsWs = new WebSocket(signed_url);
 
       elevenLabsWs.onopen = () => {
-        console.log('ElevenLabs WebSocket connected');
+        console.log('✓ ElevenLabs WebSocket connected successfully');
         
-        // Send custom configuration with Twilio-compatible audio format (ulaw_8000)
+        // Send custom configuration to override agent prompt
+        // Note: ElevenLabs handles audio format internally, Twilio does transcoding
         const configMessage = {
           type: 'conversation_initiation_client_data',
           custom_llm_extra_body: {
             system_prompt: dynamicPrompt
-          },
-          conversation_config_override: {
-            tts: {
-              audio_format: 'ulaw_8000'
-            },
-            asr: {
-              quality: 'high',
-              input_audio_format: 'ulaw_8000'
-            }
           }
         };
         
         elevenLabsWs?.send(JSON.stringify(configMessage));
-        console.log('Sent dynamic prompt + audio format (ulaw_8000) to ElevenLabs agent');
+        console.log('✓ Dynamic prompt sent to ElevenLabs agent');
         
         // Update call status to IN_PROGRESS
         supabase
@@ -203,15 +195,35 @@ serve(async (req) => {
       };
 
       elevenLabsWs.onerror = (error) => {
-        console.error('ElevenLabs WebSocket error:', error);
+        console.error('❌ ElevenLabs WebSocket error:', error);
+        // Try to send error details to Twilio before closing
+        try {
+          socket.send(JSON.stringify({
+            event: 'error',
+            message: 'ElevenLabs connection failed'
+          }));
+        } catch (e) {
+          console.error('Failed to send error to Twilio:', e);
+        }
       };
 
-      elevenLabsWs.onclose = () => {
-        console.log('ElevenLabs WebSocket closed');
+      elevenLabsWs.onclose = (event) => {
+        console.log('❌ ElevenLabs WebSocket closed:', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean
+        });
         socket.close();
       };
     } catch (error) {
-      console.error('Error setting up ElevenLabs connection:', error);
+      console.error('❌ Error setting up ElevenLabs connection:', error);
+      if (error instanceof Error) {
+        console.error('Error details:', {
+          message: error.message,
+          stack: error.stack,
+          name: error.name
+        });
+      }
       socket.close();
     }
   };
@@ -255,8 +267,11 @@ serve(async (req) => {
   };
 
   socket.onclose = async () => {
-    console.log('Twilio WebSocket closed for call:', callId);
-    elevenLabsWs?.close();
+    console.log('❌ Twilio WebSocket closed for call:', callId);
+    if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
+      console.log('Closing ElevenLabs WebSocket...');
+      elevenLabsWs.close();
+    }
     
     // Update call status
     await supabase
@@ -276,7 +291,13 @@ serve(async (req) => {
   };
 
   socket.onerror = (error) => {
-    console.error('Twilio WebSocket error:', error);
+    console.error('❌ Twilio WebSocket error:', error);
+    if (error instanceof ErrorEvent) {
+      console.error('Error details:', {
+        type: error.type,
+        message: error.message
+      });
+    }
   };
 
   return response;
