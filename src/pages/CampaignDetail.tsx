@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import CandidateUpload from "@/components/campaigns/CandidateUpload";
 import CallMonitor from "@/components/calls/CallMonitor";
+import { CallStatusMonitor } from "@/components/calls/CallStatusMonitor";
 
 const CampaignDetail = () => {
   const { id } = useParams();
@@ -290,7 +291,10 @@ const CampaignDetail = () => {
           </TabsContent>
 
           <TabsContent value="calls">
-            <CallMonitor campaignId={id!} />
+            <div className="space-y-6">
+              <CallStatusMonitor campaignId={id!} />
+              <CallMonitor campaignId={id!} />
+            </div>
           </TabsContent>
 
           <TabsContent value="upload">

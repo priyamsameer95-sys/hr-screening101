@@ -44,12 +44,12 @@ serve(async (req) => {
     console.log('Call found for candidate:', call.candidate.full_name);
 
     // Generate WebSocket stream URL (Twilio requires wss scheme)
+    // CRITICAL FIX: Use correct Supabase Edge Function WebSocket URL format
     const baseHttps = Deno.env.get('SUPABASE_URL') ?? '';
-    // Use the dedicated functions domain for WebSocket streaming
-    const wsBase = baseHttps
-      .replace('https://', 'wss://')
-      .replace('.supabase.co', '.functions.supabase.co');
-    const streamUrl = `${wsBase}/elevenlabs-stream?callId=${callId}`;
+    const wsBase = baseHttps.replace('https://', 'wss://');
+    const streamUrl = `${wsBase}/functions/v1/elevenlabs-stream?callId=${callId}`;
+    
+    console.log('🔗 WebSocket URL generated:', streamUrl);
 
     console.log('Generating TwiML with stream URL:', streamUrl);
     console.log('Call ID being passed:', callId);

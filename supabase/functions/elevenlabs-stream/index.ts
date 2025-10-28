@@ -59,7 +59,12 @@ serve(async (req) => {
   let keepAliveTicks = 0;
 
   socket.onopen = async () => {
-    console.log('✓ Twilio WebSocket connected for call:', callId);
+    console.log('✅ CRITICAL FIX DEPLOYED: Twilio WebSocket connected for call:', callId);
+    console.log('📡 Connection details:', {
+      callId,
+      timestamp: new Date().toISOString(),
+      readyState: socket.readyState
+    });
 
     try {
       // Fetch call details with campaign and questions
