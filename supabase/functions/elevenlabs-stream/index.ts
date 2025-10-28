@@ -38,6 +38,11 @@ serve(async (req) => {
   let audioQueue: any[] = []; // Buffer audio until twilioStreamSid is established
   let mediaInCount = 0;
   let audioOutCount = 0;
+  const forceMuLaw = ((Deno.env.get('ELEVENLABS_FORCE_MULAW') ?? '').toLowerCase() === 'true');
+  const elSampleRate = Number(Deno.env.get('ELEVENLABS_OUTPUT_SAMPLE_RATE') ?? '16000');
+  let firstAudioSent = false;
+  let keepAliveInterval: number | null = null;
+  let keepAliveTicks = 0;
 
   socket.onopen = async () => {
     console.log('✓ Twilio WebSocket connected for call:', callId);
@@ -115,11 +120,14 @@ serve(async (req) => {
           type: 'conversation_initiation_client_data',
           custom_llm_extra_body: {
             system_prompt: dynamicPrompt
+          },
+          tts: {
+            audio_format: 'ulaw_8000'
           }
         };
         
         elevenLabsWs?.send(JSON.stringify(configMessage));
-        console.log('✓ Dynamic prompt sent to ElevenLabs agent');
+        console.log('✓ Dynamic prompt + TTS format (ulaw_8000) sent to ElevenLabs agent');
         
         // Update call status to IN_PROGRESS
         supabase
@@ -145,19 +153,24 @@ serve(async (req) => {
             const audioPreview = data.audio.substring(0, 4);
             console.log(`EL audio out #${audioOutCount}, preview: ${audioPreview}`);
             
+            const payloadToSend = forceMuLaw 
+              ? safeTranscodeToMuLawBase64(data.audio, elSampleRate)
+              : data.audio;
+            
             // Forward audio from ElevenLabs to Twilio using the correct Twilio streamSid
             if (!twilioStreamSid) {
               console.log('Buffering audio - streamSid not set yet');
-              audioQueue.push(data.audio);
+              audioQueue.push(payloadToSend);
             } else {
               // Flush queue if any buffered audio
               if (audioQueue.length > 0) {
                 console.log(`Flushing ${audioQueue.length} buffered audio chunks`);
                 audioQueue.forEach(audio => {
+                  const queuedPayload = forceMuLaw ? safeTranscodeToMuLawBase64(audio, elSampleRate) : audio;
                   socket.send(JSON.stringify({
                     event: 'media',
                     streamSid: twilioStreamSid,
-                    media: { payload: audio },
+                    media: { payload: queuedPayload },
                   }));
                 });
                 audioQueue = [];
@@ -168,9 +181,19 @@ serve(async (req) => {
                 event: 'media',
                 streamSid: twilioStreamSid,
                 media: {
-                  payload: data.audio,
+                  payload: payloadToSend,
                 },
               }));
+              
+              // Mark first audio sent and stop keepalive if running
+              if (!firstAudioSent) {
+                firstAudioSent = true;
+                if (keepAliveInterval) {
+                  clearInterval(keepAliveInterval);
+                  keepAliveInterval = null;
+                  console.log('⏹️ Keepalive stopped (first audio sent)');
+                }
+              }
             }
           } else if (data.type === 'transcript' && data.transcript) {
             // Save transcript
@@ -240,13 +263,37 @@ serve(async (req) => {
         if (audioQueue.length > 0) {
           console.log(`Flushing ${audioQueue.length} buffered audio chunks on stream start`);
           audioQueue.forEach(audio => {
+            const payload = forceMuLaw ? safeTranscodeToMuLawBase64(audio, elSampleRate) : audio;
             socket.send(JSON.stringify({
               event: 'media',
               streamSid: twilioStreamSid,
-              media: { payload: audio },
+              media: { payload },
             }));
           });
           audioQueue = [];
+        }
+
+        // Start keepalive until first audio arrives (max ~3s)
+        if (!keepAliveInterval) {
+          console.log('▶️ Starting keepalive frames until first audio...');
+          keepAliveTicks = 0;
+          keepAliveInterval = setInterval(() => {
+            if (firstAudioSent || keepAliveTicks >= 6 || socket.readyState !== WebSocket.OPEN) {
+              if (keepAliveInterval) {
+                clearInterval(keepAliveInterval);
+                keepAliveInterval = null;
+                console.log('⏹️ Keepalive stopped');
+              }
+              return;
+            }
+            const silence = silentMuLawFrameBase64();
+            socket.send(JSON.stringify({
+              event: 'media',
+              streamSid: twilioStreamSid,
+              media: { payload: silence },
+            }));
+            keepAliveTicks++;
+          }, 500) as unknown as number;
         }
       } else if (message.event === 'media' && elevenLabsWs?.readyState === WebSocket.OPEN) {
         mediaInCount++;
@@ -268,6 +315,10 @@ serve(async (req) => {
 
   socket.onclose = async () => {
     console.log('❌ Twilio WebSocket closed for call:', callId);
+    if (keepAliveInterval) {
+      clearInterval(keepAliveInterval);
+      keepAliveInterval = null;
+    }
     if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
       console.log('Closing ElevenLabs WebSocket...');
       elevenLabsWs.close();
@@ -302,6 +353,100 @@ serve(async (req) => {
 
   return response;
 });
+
+// ===== Audio utilities for μ-law fallback and keepalive =====
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode.apply(null, Array.from(chunk));
+  }
+  // deno-lint-ignore no-explicit-any
+  return btoa(binary as any);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function pcm16LEToFloat32(bytes: Uint8Array): Float32Array {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const out = new Float32Array(bytes.byteLength / 2);
+  for (let i = 0; i < out.length; i++) {
+    const s = view.getInt16(i * 2, true);
+    out[i] = s / 32768;
+  }
+  return out;
+}
+
+function downsampleFloat32(input: Float32Array, inRate: number, outRate: number): Float32Array {
+  if (outRate === inRate) return input;
+  const ratio = inRate / outRate;
+  const newLen = Math.floor(input.length / ratio);
+  const out = new Float32Array(newLen);
+  let pos = 0;
+  for (let i = 0; i < newLen; i++) {
+    const nextPos = Math.floor((i + 1) * ratio);
+    let sum = 0;
+    let count = 0;
+    for (; pos < nextPos && pos < input.length; pos++) {
+      sum += input[pos];
+      count++;
+    }
+    out[i] = count > 0 ? sum / count : 0;
+  }
+  return out;
+}
+
+function linearToMuLawSample(sample: number): number {
+  // Clamp
+  const MAX = 0x7FFF;
+  let s = Math.max(-1, Math.min(1, sample)) * MAX;
+  const BIAS = 0x84; // 132
+  const CLIP = 32635;
+  let sign = (s < 0) ? 0x80 : 0x00;
+  if (s < 0) s = -s;
+  if (s > CLIP) s = CLIP;
+  s = s + BIAS;
+  let exponent = 7;
+  for (let expMask = 0x4000; (s & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) { /* find exponent */ }
+  const mantissa = (s >> ((exponent === 0) ? 4 : (exponent + 3))) & 0x0F;
+  const mu = ~(sign | (exponent << 4) | mantissa) & 0xFF;
+  return mu;
+}
+
+function floatToMuLawBytes(input: Float32Array): Uint8Array {
+  const out = new Uint8Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    out[i] = linearToMuLawSample(input[i]);
+  }
+  return out;
+}
+
+function safeTranscodeToMuLawBase64(b64: string, inSampleRate: number): string {
+  try {
+    const pcmBytes = base64ToBytes(b64);
+    const float32 = pcm16LEToFloat32(pcmBytes);
+    const down = downsampleFloat32(float32, inSampleRate, 8000);
+    const mu = floatToMuLawBytes(down);
+    return bytesToBase64(mu);
+  } catch (e) {
+    console.error('Transcode to μ-law failed, falling back to original audio:', e);
+    return b64; // fallback
+  }
+}
+
+function silentMuLawFrameBase64(): string {
+  // 20ms @8kHz = 160 samples of μ-law silence (0xFF)
+  const frame = new Uint8Array(160);
+  frame.fill(0xFF);
+  return bytesToBase64(frame);
+}
 
 /**
  * Build a conversational prompt with campaign-specific questions
