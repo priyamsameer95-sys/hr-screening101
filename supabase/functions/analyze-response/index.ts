@@ -72,62 +72,20 @@ serve(async (req) => {
       .map((q: any, idx: number) => `${idx + 1}. ${q.question_text}`)
       .join('\n');
     
-    const aiPrompt = `You are an expert HR analyst. Analyze this recruitment screening call transcript and extract comprehensive structured information.
+    const aiPrompt = `You are an expert HR analyst. Analyze this recruitment screening call transcript.
 
-CANDIDATE INFORMATION:
-- Name: ${candidate.full_name}
-- Position Applied: ${candidate.position || campaign.position}
-- Phone: ${candidate.phone_number}
-- Email: ${candidate.email}
-${candidate.current_company ? `- Current Company: ${candidate.current_company}` : ''}
-${candidate.years_experience ? `- Years Experience: ${candidate.years_experience}` : ''}
+CANDIDATE: ${candidate.full_name}
+POSITION: ${candidate.position || campaign.position}
+PHONE: ${candidate.phone_number}
+EMAIL: ${candidate.email}
 
-QUESTIONS ASKED (in order):
+QUESTIONS ASKED:
 ${questionsList || 'Standard screening questions'}
 
-FULL CONVERSATION TRANSCRIPT:
+CONVERSATION TRANSCRIPT:
 ${transcript}
 
-ANALYSIS TASKS:
-1. Extract specific answers for each question asked
-2. Identify key qualifications, skills, and experience mentioned
-3. Assess candidate's communication quality and engagement
-4. Detect any red flags or concerns
-5. Provide an overall recommendation
-
-Return a JSON object with these EXACT fields (use null for missing data):
-{
-  "notice_period": { "value": number, "unit": "days|weeks|months", "immediate": boolean },
-  "current_ctc": { "amount": number, "currency": "INR" },
-  "expected_ctc": { "amount": number, "currency": "INR" },
-  "reason_for_change": "detailed reason for job change",
-  "key_skills": ["skill1", "skill2", "skill3"],
-  "technical_experience": "summary of technical background",
-  "years_experience": number,
-  "current_company": "company name",
-  "current_role": "current job title",
-  "availability": "availability for interviews/joining",
-  "work_preference": "remote|hybrid|office|flexible",
-  "engagement_score": number (1-10, assess responsiveness and enthusiasm),
-  "communication_score": number (1-10, assess clarity and professionalism),
-  "qualification_score": number (1-10, assess fit for role),
-  "overall_score": number (1-10, overall assessment),
-  "recommendation": "PROCEED|REVIEW|REJECT",
-  "red_flags": ["flag1", "flag2"] or [],
-  "strengths": ["strength1", "strength2"],
-  "concerns": ["concern1", "concern2"] or [],
-  "reasoning": "2-3 sentence explanation for recommendation",
-  "next_steps": ["action1", "action2"],
-  "question_responses": [
-    {
-      "question": "question text",
-      "answer": "candidate's answer",
-      "assessment": "your assessment of the answer"
-    }
-  ]
-}
-
-IMPORTANT: Return ONLY valid JSON, no markdown or explanation.`;
+Analyze communication quality, extract key information (notice period, salary expectations, skills, experience), identify strengths and red flags, and provide hiring recommendation.`;
 
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -138,30 +96,103 @@ IMPORTANT: Return ONLY valid JSON, no markdown or explanation.`;
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages: [
-          { role: 'system', content: 'You are an expert HR analyst. Extract structured information from call transcripts and return valid JSON only.' },
+          { role: 'system', content: 'You are an expert HR analyst providing structured call analysis.' },
           { role: 'user', content: aiPrompt }
         ],
+        tools: [{
+          type: "function",
+          function: {
+            name: "save_call_analysis",
+            description: "Save structured analysis of recruitment screening call",
+            parameters: {
+              type: "object",
+              properties: {
+                notice_period: {
+                  type: "object",
+                  properties: {
+                    value: { type: "number" },
+                    unit: { type: "string", enum: ["days", "weeks", "months"] },
+                    immediate: { type: "boolean" }
+                  }
+                },
+                current_ctc: {
+                  type: "object",
+                  properties: {
+                    amount: { type: "number" },
+                    currency: { type: "string" }
+                  }
+                },
+                expected_ctc: {
+                  type: "object",
+                  properties: {
+                    amount: { type: "number" },
+                    currency: { type: "string" }
+                  }
+                },
+                reason_for_change: { type: "string" },
+                key_skills: { type: "array", items: { type: "string" } },
+                technical_experience: { type: "string" },
+                years_experience: { type: "number" },
+                current_company: { type: "string" },
+                current_role: { type: "string" },
+                work_preference: { type: "string" },
+                engagement_score: { type: "integer", minimum: 1, maximum: 10 },
+                qualification_score: { type: "integer", minimum: 1, maximum: 10 },
+                overall_score: { type: "integer", minimum: 1, maximum: 10 },
+                recommendation: { type: "string", enum: ["PROCEED", "REVIEW", "REJECT"] },
+                red_flags: { type: "array", items: { type: "string" } },
+                strengths: { type: "array", items: { type: "string" } },
+                concerns: { type: "array", items: { type: "string" } },
+                reasoning: { type: "string" },
+                next_steps: { type: "array", items: { type: "string" } },
+                question_responses: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      question: { type: "string" },
+                      answer: { type: "string" },
+                      assessment: { type: "string" },
+                      red_flags: { type: "array", items: { type: "string" } }
+                    }
+                  }
+                }
+              },
+              required: ["recommendation", "reasoning", "engagement_score", "qualification_score", "overall_score"]
+            }
+          }
+        }],
+        tool_choice: { type: "function", function: { name: "save_call_analysis" } }
       }),
     });
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();
+      if (aiResponse.status === 429) {
+        console.error('Rate limit exceeded');
+        throw new Error('Rate limit exceeded. Please try again later.');
+      }
+      if (aiResponse.status === 402) {
+        console.error('Payment required');
+        throw new Error('Payment required. Please add credits to your Lovable workspace.');
+      }
       console.error('AI analysis failed:', errorText);
       throw new Error(`AI analysis failed: ${errorText}`);
     }
 
     const aiData = await aiResponse.json();
-    const analysisText = aiData.choices[0].message.content;
+    console.log('AI response structure:', JSON.stringify(aiData, null, 2));
     
-    // Parse the JSON from the AI response (remove markdown if present)
-    let analysis;
-    try {
-      const cleanJson = analysisText.replace(/```json\n?|\n?```/g, '').trim();
-      analysis = JSON.parse(cleanJson);
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', analysisText);
-      throw new Error('Invalid AI response format');
+    // Extract structured data from tool call
+    const toolCall = aiData.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall) {
+      console.error('No tool call in response:', aiData);
+      throw new Error('AI did not return structured analysis');
     }
+
+    const analysis = typeof toolCall.function.arguments === 'string' 
+      ? JSON.parse(toolCall.function.arguments)
+      : toolCall.function.arguments;
 
     console.log('AI Analysis complete:', {
       recommendation: analysis.recommendation,
