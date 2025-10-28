@@ -38,7 +38,7 @@ serve(async (req) => {
   let audioQueue: any[] = []; // Buffer audio until twilioStreamSid is established
   let mediaInCount = 0;
   let audioOutCount = 0;
-  const forceMuLaw = ((Deno.env.get('ELEVENLABS_FORCE_MULAW') ?? '').toLowerCase() === 'true');
+  const forceMuLaw = ((Deno.env.get('ELEVENLABS_FORCE_MULAW') ?? 'true').toLowerCase() === 'true');
   const elSampleRate = Number(Deno.env.get('ELEVENLABS_OUTPUT_SAMPLE_RATE') ?? '16000');
   let firstAudioSent = false;
   let keepAliveInterval: number | null = null;
@@ -120,14 +120,11 @@ serve(async (req) => {
           type: 'conversation_initiation_client_data',
           custom_llm_extra_body: {
             system_prompt: dynamicPrompt
-          },
-          tts: {
-            audio_format: 'ulaw_8000'
           }
         };
         
         elevenLabsWs?.send(JSON.stringify(configMessage));
-        console.log('✓ Dynamic prompt + TTS format (ulaw_8000) sent to ElevenLabs agent');
+        console.log('✓ Dynamic prompt sent to ElevenLabs agent');
         
         // Update call status to IN_PROGRESS
         supabase
@@ -300,9 +297,10 @@ serve(async (req) => {
         if (mediaInCount % 50 === 0) {
           console.log(`Twilio media in: ${mediaInCount} chunks received`);
         }
-        // Forward audio from Twilio to ElevenLabs
+        // Forward audio from Twilio to ElevenLabs (transcode μ-law 8k -> PCM16 16k)
+        const pcm16b64 = transcodeTwilioMuLawToPCM16B64(message.media.payload);
         elevenLabsWs.send(JSON.stringify({
-          user_audio_chunk: message.media.payload,
+          user_audio_chunk: pcm16b64,
         }));
       } else if (message.event === 'stop') {
         console.log('Twilio stream stopped');
@@ -446,6 +444,64 @@ function silentMuLawFrameBase64(): string {
   const frame = new Uint8Array(160);
   frame.fill(0xFF);
   return bytesToBase64(frame);
+}
+
+// Inbound (Twilio -> ElevenLabs) transcoding: μ-law 8k -> PCM16 16k
+function muLawByteToLinearSample(u8: number): number {
+  const BIAS = 0x84;
+  u8 = ~u8 & 0xff;
+  const sign = (u8 & 0x80) ? -1 : 1;
+  const exponent = (u8 >> 4) & 0x07;
+  const mantissa = u8 & 0x0F;
+  let sample = ((mantissa << 4) + 8) << (exponent + 3);
+  sample -= BIAS;
+  return sign * sample;
+}
+
+function muLawBytesToFloat32(bytes: Uint8Array): Float32Array {
+  const out = new Float32Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    out[i] = muLawByteToLinearSample(bytes[i]) / 32768;
+  }
+  return out;
+}
+
+function upsampleFloat32(input: Float32Array, inRate: number, outRate: number): Float32Array {
+  if (outRate === inRate) return input;
+  const ratio = outRate / inRate;
+  const newLen = Math.floor(input.length * ratio);
+  const out = new Float32Array(newLen);
+  for (let i = 0; i < newLen; i++) {
+    const srcPos = i / ratio;
+    const i0 = Math.floor(srcPos);
+    const i1 = Math.min(i0 + 1, input.length - 1);
+    const frac = srcPos - i0;
+    out[i] = (1 - frac) * input[i0] + frac * input[i1];
+  }
+  return out;
+}
+
+function float32ToPCM16LEBytes(input: Float32Array): Uint8Array {
+  const out = new Uint8Array(input.length * 2);
+  const view = new DataView(out.buffer);
+  for (let i = 0; i < input.length; i++) {
+     let s = Math.max(-1, Math.min(1, input[i]));
+     view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return out;
+}
+
+function transcodeTwilioMuLawToPCM16B64(b64: string): string {
+  try {
+    const mu = base64ToBytes(b64);
+    const f32_8k = muLawBytesToFloat32(mu);
+    const f32_16k = upsampleFloat32(f32_8k, 8000, 16000);
+    const pcm16 = float32ToPCM16LEBytes(f32_16k);
+    return bytesToBase64(pcm16);
+  } catch (e) {
+    console.error('Inbound transcode (μ-law->PCM16) failed, passing original:', e);
+    return b64;
+  }
 }
 
 /**
