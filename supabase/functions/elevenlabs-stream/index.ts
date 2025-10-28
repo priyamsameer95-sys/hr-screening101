@@ -40,6 +40,45 @@ serve(async (req) => {
     console.log('Twilio WebSocket connected for call:', callId);
 
     try {
+      // Fetch call details with campaign and questions
+      const { data: call, error: callError } = await supabase
+        .from('calls')
+        .select(`
+          *,
+          candidate:candidates!inner(
+            *,
+            campaign:campaigns!inner(
+              *,
+              question_template:question_templates(
+                *,
+                questions(*)
+              )
+            )
+          )
+        `)
+        .eq('id', callId)
+        .single();
+
+      if (callError || !call) {
+        console.error('Call not found:', callError);
+        socket.close();
+        return;
+      }
+
+      const candidate = call.candidate;
+      const campaign = candidate.campaign;
+      const questions = campaign.question_template?.questions || [];
+
+      console.log('Call details loaded:', {
+        candidate: candidate.full_name,
+        campaign: campaign.name,
+        questionsCount: questions.length
+      });
+
+      // Build dynamic prompt with questions
+      const dynamicPrompt = buildConversationalPrompt(candidate, campaign, questions);
+      console.log('Dynamic prompt created for agent');
+
       // Get signed URL from ElevenLabs
       const signedUrlResponse = await fetch(
         `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${agentId}`,
@@ -66,6 +105,27 @@ serve(async (req) => {
 
       elevenLabsWs.onopen = () => {
         console.log('ElevenLabs WebSocket connected');
+        
+        // Send custom configuration to override agent prompt
+        const configMessage = {
+          type: 'conversation_initiation_client_data',
+          custom_llm_extra_body: {
+            system_prompt: dynamicPrompt
+          }
+        };
+        
+        elevenLabsWs?.send(JSON.stringify(configMessage));
+        console.log('Sent dynamic prompt to ElevenLabs agent');
+        
+        // Update call status to IN_PROGRESS
+        supabase
+          .from('calls')
+          .update({ 
+            status: 'IN_PROGRESS',
+            started_at: new Date().toISOString() 
+          })
+          .eq('id', callId)
+          .then(() => console.log('Call status updated to IN_PROGRESS'));
       };
 
       elevenLabsWs.onmessage = async (event) => {
@@ -172,3 +232,59 @@ serve(async (req) => {
 
   return response;
 });
+
+/**
+ * Build a conversational prompt with campaign-specific questions
+ */
+function buildConversationalPrompt(candidate: any, campaign: any, questions: any[]): string {
+  const sortedQuestions = questions.sort((a, b) => a.sequence_order - b.sequence_order);
+  
+  const questionsList = sortedQuestions
+    .map((q, idx) => `${idx + 1}. ${q.question_text}`)
+    .join('\n');
+
+  return `You are Kajal, an AI HR assistant from ${campaign.company_name || 'CashKaro'}. You're conducting a screening call for the ${campaign.position} position.
+
+CANDIDATE DETAILS:
+- Name: ${candidate.full_name}
+- Position Applied: ${candidate.position || campaign.position}
+- Phone: ${candidate.phone_number}
+${candidate.current_company ? `- Current Company: ${candidate.current_company}` : ''}
+${candidate.years_experience ? `- Experience: ${candidate.years_experience} years` : ''}
+
+YOUR ROLE:
+- Be warm, professional, and conversational
+- Speak naturally like a real HR professional would
+- Keep responses concise (2-3 sentences max)
+- Listen actively and acknowledge responses
+- Ask ONE question at a time
+- Let the candidate finish speaking before responding
+
+CALL FLOW:
+1. Start with a warm greeting and confirm you're speaking with ${candidate.full_name}
+2. Briefly explain this is a screening call for the ${campaign.position} role (10-15 minutes)
+3. Ask if now is a good time - if not, offer to reschedule
+4. Go through each question below IN ORDER, naturally and conversationally
+5. After each response, acknowledge briefly before moving to next question
+6. At the end, thank them and mention next steps (team will review and respond in 2-3 business days)
+
+QUESTIONS TO ASK (in this order):
+${questionsList}
+
+IMPORTANT GUIDELINES:
+- If candidate asks to reschedule, be accommodating and polite
+- If they're not available, thank them and end call gracefully
+- For salary questions, let them share current and expected separately
+- For notice period, confirm the exact duration
+- Don't rush - let natural pauses happen
+- Use acknowledgments like "Thank you for sharing that", "I see", "That's helpful"
+- Stay on topic but be human and empathetic
+
+RESPONSE EXTRACTION:
+- Listen carefully for key information like notice period, salary figures, skills
+- Don't ask follow-up questions unless response is completely unclear
+- Trust the candidate's answers and move forward
+
+Remember: You're representing ${campaign.company_name || 'the company'}, so maintain professionalism while being friendly and approachable.`;
+}
+
