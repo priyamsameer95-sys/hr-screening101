@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ArrowLeft, Play, Pause, Loader2, Phone } from "lucide-react";
+import { ArrowLeft, Play, Pause, Loader2, Phone, Download } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -109,6 +109,45 @@ const CampaignDetail = () => {
     },
   });
 
+  // Export results handler
+  const handleExportResults = async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/export-results?campaignId=${id}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${session?.access_token}`
+          }
+        }
+      );
+
+      if (!response.ok) throw new Error('Export failed');
+
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `campaign_${campaign.name}_results.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+      toast({
+        title: "Export Successful",
+        description: "Call results have been downloaded as CSV",
+      });
+    } catch (error) {
+      console.error('Error exporting results:', error);
+      toast({
+        title: "Export Failed",
+        description: "Could not export results",
+        variant: "destructive",
+      });
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -147,6 +186,15 @@ const CampaignDetail = () => {
             </div>
 
             <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={handleExportResults}
+                disabled={candidates.length === 0}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Export Results
+              </Button>
+
               {campaign.status === "DRAFT" && candidates.length > 0 && (
                 <Button
                   onClick={() => startCampaignMutation.mutate()}
