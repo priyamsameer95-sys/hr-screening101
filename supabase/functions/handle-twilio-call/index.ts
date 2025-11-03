@@ -2,13 +2,24 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 serve(async (req) => {
+  const timestamp = new Date().toISOString();
+  
   try {
     const url = new URL(req.url);
     const callId = url.searchParams.get('callId');
 
-    console.log('Handling Twilio call for callId:', callId);
+    console.log(`📞 [Twilio-Handler] Incoming request at ${timestamp}:`, {
+      callId,
+      method: req.method,
+      url: req.url,
+      headers: {
+        'user-agent': req.headers.get('user-agent'),
+        'content-type': req.headers.get('content-type')
+      }
+    });
 
     if (!callId) {
+      console.error('❌ [Twilio-Handler] Missing callId parameter');
       throw new Error('Call ID is required');
     }
 
@@ -37,28 +48,29 @@ serve(async (req) => {
       .single();
 
     if (callError || !call) {
-      console.error('Call not found:', callError);
+      console.error(`❌ [Twilio-Handler] Call not found:`, { callId, error: callError });
       throw new Error('Call not found');
     }
 
-    console.log('Call found for candidate:', call.candidate.full_name);
+    console.log(`✅ [Twilio-Handler] Call found:`, {
+      callId: call.id,
+      candidateName: call.candidate.full_name,
+      campaignName: call.candidate.campaign.name
+    });
 
     // Generate WebSocket stream URL (Twilio requires wss scheme)
-    // CRITICAL FIX: Use correct Supabase Edge Function WebSocket URL format
     const baseHttps = Deno.env.get('SUPABASE_URL') ?? '';
     const wsBase = baseHttps.replace('https://', 'wss://');
     const streamUrl = `${wsBase}/functions/v1/elevenlabs-stream?callId=${callId}`;
     
-    console.log('🔗 WebSocket URL generated:', streamUrl);
-    console.log('🔗 Base HTTPS:', baseHttps);
-    console.log('🔗 WS Base:', wsBase);
-
-    console.log('Generating TwiML with stream URL:', streamUrl);
-    console.log('Call ID being passed:', callId);
+    console.log(`🔗 [Twilio-Handler] WebSocket URL for call ${callId}:`, {
+      streamUrl,
+      baseHttps,
+      wsBase,
+      timestamp
+    });
 
     // Generate TwiML to connect to ElevenLabs via WebSocket (bidirectional audio)
-    // Add statusCallback for better debugging
-    const statusCallbackUrl = `${baseHttps}/functions/v1/twilio-status`;
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
@@ -68,16 +80,21 @@ serve(async (req) => {
   </Connect>
 </Response>`;
 
-    console.log('TwiML generated with track="both_tracks" for bidirectional audio');
-    console.log('🔍 Full TwiML:', twiml);
+    console.log(`✅ [Twilio-Handler] TwiML generated for call ${callId}:`, {
+      track: 'both_tracks',
+      streamUrl,
+      hasCallIdParameter: true
+    });
+    
+    console.log(`📄 [Twilio-Handler] Full TwiML:\n${twiml}`);
 
-    console.log('TwiML generated successfully');
-
+    console.log(`✅ [Twilio-Handler] Returning TwiML response for call ${callId}`);
+    
     return new Response(twiml, {
       headers: { 'Content-Type': 'text/xml' },
     });
   } catch (error) {
-    console.error('Error handling Twilio call:', error);
+    console.error(`❌ [Twilio-Handler] Error:`, error);
     const errorTwiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say>We're sorry, but we're experiencing technical difficulties. Please try again later.</Say>

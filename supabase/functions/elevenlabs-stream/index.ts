@@ -6,28 +6,29 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-console.log('🚀 ElevenLabs stream function started');
+console.log('🚀 [ElevenLabs] Function initialized');
 
 serve(async (req) => {
+  const requestTimestamp = new Date().toISOString();
+  
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
-  console.log('📞 Incoming request:', { 
+  console.log(`📞 [ElevenLabs] ${requestTimestamp} - Incoming request:`, { 
     method: req.method, 
     url: req.url,
-    headers: Object.fromEntries(req.headers.entries()),
-    timestamp: new Date().toISOString()
+    hasUpgradeHeader: req.headers.has('upgrade')
   });
 
   // Add health check endpoint for testing
   const url = new URL(req.url);
   if (url.searchParams.get('health') === 'check') {
-    console.log('✅ Health check requested');
+    console.log('✅ [ElevenLabs] Health check - OK');
     return new Response(JSON.stringify({ 
       status: 'healthy',
-      timestamp: new Date().toISOString(),
+      timestamp: requestTimestamp,
       function: 'elevenlabs-stream'
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -37,8 +38,7 @@ serve(async (req) => {
   const upgradeHeader = req.headers.get("upgrade") || "";
   
   if (upgradeHeader.toLowerCase() !== "websocket") {
-    console.error('❌ Not a WebSocket request. Upgrade header:', upgradeHeader);
-    console.error('❌ All headers:', Object.fromEntries(req.headers.entries()));
+    console.error(`❌ [ElevenLabs] Not a WebSocket request. Upgrade: ${upgradeHeader}`);
     return new Response("Expected WebSocket connection", { 
       status: 400,
       headers: corsHeaders 
@@ -49,20 +49,19 @@ serve(async (req) => {
   const agentId = Deno.env.get('ELEVENLABS_AGENT_ID');
   const apiKey = Deno.env.get('ELEVENLABS_API_KEY');
 
-  console.log('🔑 ElevenLabs credentials check:', { 
+  console.log(`🔑 [ElevenLabs] Call ${callId} - Credentials check:`, { 
     callId, 
-    agentId: agentId ? agentId.slice(0, 15) + '...' : 'MISSING',
+    hasAgentId: !!agentId,
     hasApiKey: !!apiKey,
-    apiKeyLength: apiKey?.length || 0
   });
 
   if (!callId) {
-    console.error('Missing callId parameter');
+    console.error('❌ [ElevenLabs] Missing callId parameter');
     return new Response("Missing callId parameter", { status: 400 });
   }
 
   if (!agentId || !apiKey) {
-    console.error('Missing ElevenLabs credentials:', { hasAgentId: !!agentId, hasApiKey: !!apiKey });
+    console.error('❌ [ElevenLabs] Missing credentials');
     return new Response("Missing ElevenLabs credentials", { status: 500 });
   }
 
@@ -76,7 +75,7 @@ serve(async (req) => {
   let elevenLabsWs: WebSocket | null = null;
   let conversationId: string | null = null;
   let twilioStreamSid: string | null = null;
-  let audioQueue: any[] = []; // Buffer audio until twilioStreamSid is established
+  let audioQueue: any[] = []; 
   let mediaInCount = 0;
   let audioOutCount = 0;
   const forceMuLaw = ((Deno.env.get('ELEVENLABS_FORCE_MULAW') ?? 'true').toLowerCase() === 'true');
@@ -86,12 +85,7 @@ serve(async (req) => {
   let keepAliveTicks = 0;
 
   socket.onopen = async () => {
-    console.log('✅ CRITICAL FIX DEPLOYED: Twilio WebSocket connected for call:', callId);
-    console.log('📡 Connection details:', {
-      callId,
-      timestamp: new Date().toISOString(),
-      readyState: socket.readyState
-    });
+    console.log(`✅ [Twilio→ElevenLabs] Call ${callId} - WebSocket opened at ${new Date().toISOString()}`);
 
     try {
       // Fetch call details with campaign and questions
@@ -114,7 +108,7 @@ serve(async (req) => {
         .single();
 
       if (callError || !call) {
-        console.error('Call not found:', callError);
+        console.error(`❌ [ElevenLabs] Call ${callId} not found:`, callError);
         socket.close();
         return;
       }
@@ -123,17 +117,20 @@ serve(async (req) => {
       const campaign = candidate.campaign;
       const questions = campaign.question_template?.questions || [];
 
-      console.log('Call details loaded:', {
+      console.log(`✅ [ElevenLabs] Call ${callId} details:`, {
         candidate: candidate.full_name,
         campaign: campaign.name,
+        company: campaign.company_name,
+        agent: campaign.agent_name,
         questionsCount: questions.length
       });
 
       // Build dynamic prompt with questions
       const dynamicPrompt = buildConversationalPrompt(candidate, campaign, questions);
-      console.log('Dynamic prompt created for agent');
+      console.log(`📝 [ElevenLabs] Call ${callId} - Dynamic prompt created`);
 
       // Get signed URL from ElevenLabs
+      console.log(`🔗 [ElevenLabs] Call ${callId} - Requesting signed URL...`);
       const signedUrlResponse = await fetch(
         `https://api.elevenlabs.io/v1/convai/conversation/get_signed_url?agent_id=${agentId}`,
         {
@@ -146,22 +143,21 @@ serve(async (req) => {
 
       if (!signedUrlResponse.ok) {
         const errorText = await signedUrlResponse.text();
-        console.error('Failed to get signed URL:', errorText);
+        console.error(`❌ [ElevenLabs] Call ${callId} - Failed to get signed URL:`, errorText);
         socket.close();
         return;
       }
 
       const { signed_url } = await signedUrlResponse.json();
-      console.log('Got signed URL, connecting to ElevenLabs...');
+      console.log(`✅ [ElevenLabs] Call ${callId} - Signed URL obtained, connecting...`);
 
       // Connect to ElevenLabs with signed URL
       elevenLabsWs = new WebSocket(signed_url);
 
       elevenLabsWs.onopen = () => {
-        console.log('✓ ElevenLabs WebSocket connected successfully');
+        console.log(`✅ [ElevenLabs] Call ${callId} - Connected to ElevenLabs AI`);
         
         // Send custom configuration to override agent prompt
-        // Note: ElevenLabs handles audio format internally, Twilio does transcoding
         const configMessage = {
           type: 'conversation_initiation_client_data',
           custom_llm_extra_body: {
@@ -170,7 +166,7 @@ serve(async (req) => {
         };
         
         elevenLabsWs?.send(JSON.stringify(configMessage));
-        console.log('✓ Dynamic prompt sent to ElevenLabs agent');
+        console.log(`📤 [ElevenLabs] Call ${callId} - Configuration sent to AI`);
         
         // Update call status to IN_PROGRESS
         supabase
@@ -180,40 +176,43 @@ serve(async (req) => {
             started_at: new Date().toISOString() 
           })
           .eq('id', callId)
-          .then(() => console.log('Call status updated to IN_PROGRESS'));
+          .then(() => console.log(`✅ [ElevenLabs] Call ${callId} - Status updated to IN_PROGRESS`));
       };
 
       elevenLabsWs.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
-          console.log('ElevenLabs message type:', data.type);
+          
+          // Only log non-audio messages to avoid spam
+          if (data.type !== 'audio') {
+            console.log(`📨 [ElevenLabs] Call ${callId} - Message type: ${data.type}`);
+          }
 
           if (data.type === 'conversation_initiation_metadata') {
             conversationId = data.conversation_id;
-            console.log('Conversation started:', conversationId);
+            console.log(`🆔 [ElevenLabs] Call ${callId} - Conversation ID: ${conversationId}`);
           } else if (data.type === 'audio' && data.audio) {
             audioOutCount++;
-            const audioPreview = data.audio.substring(0, 4);
-            console.log(`EL audio out #${audioOutCount}, preview: ${audioPreview}`);
+            if (audioOutCount % 100 === 0) {
+              console.log(`🔊 [ElevenLabs→Twilio] Call ${callId} - ${audioOutCount} audio chunks sent`);
+            }
             
             const payloadToSend = forceMuLaw 
               ? safeTranscodeToMuLawBase64(data.audio, elSampleRate)
               : data.audio;
             
-            // Forward audio from ElevenLabs to Twilio using the correct Twilio streamSid
+            // Forward audio from ElevenLabs to Twilio
             if (!twilioStreamSid) {
-              console.log('Buffering audio - streamSid not set yet');
               audioQueue.push(payloadToSend);
             } else {
               // Flush queue if any buffered audio
               if (audioQueue.length > 0) {
-                console.log(`Flushing ${audioQueue.length} buffered audio chunks`);
+                console.log(`📦 [ElevenLabs] Call ${callId} - Flushing ${audioQueue.length} buffered chunks`);
                 audioQueue.forEach(audio => {
-                  const queuedPayload = forceMuLaw ? safeTranscodeToMuLawBase64(audio, elSampleRate) : audio;
                   socket.send(JSON.stringify({
                     event: 'media',
                     streamSid: twilioStreamSid,
-                    media: { payload: queuedPayload },
+                    media: { payload: audio },
                   }));
                 });
                 audioQueue = [];
@@ -223,18 +222,16 @@ serve(async (req) => {
               socket.send(JSON.stringify({
                 event: 'media',
                 streamSid: twilioStreamSid,
-                media: {
-                  payload: payloadToSend,
-                },
+                media: { payload: payloadToSend },
               }));
               
-              // Mark first audio sent and stop keepalive if running
+              // Mark first audio sent and stop keepalive
               if (!firstAudioSent) {
                 firstAudioSent = true;
                 if (keepAliveInterval) {
                   clearInterval(keepAliveInterval);
                   keepAliveInterval = null;
-                  console.log('⏹️ Keepalive stopped (first audio sent)');
+                  console.log(`⏹️ [ElevenLabs] Call ${callId} - Keepalive stopped (audio flowing)`);
                 }
               }
             }
@@ -248,33 +245,24 @@ serve(async (req) => {
               confidence: 0.95,
               sequence_number: Date.now(),
             });
-            const transcriptPreview = data.transcript.substring(0, 50);
-            console.log(`EL transcript (${data.role}): ${transcriptPreview}...`);
+            const preview = data.transcript.substring(0, 50);
+            console.log(`💬 [ElevenLabs] Call ${callId} - ${data.role}: ${preview}...`);
           } else if (data.type === 'interruption') {
-            console.log('User interrupted');
+            console.log(`⚠️ [ElevenLabs] Call ${callId} - User interrupted`);
           } else if (data.type === 'ping') {
             elevenLabsWs?.send(JSON.stringify({ type: 'pong', event_id: data.event_id }));
           }
         } catch (error) {
-          console.error('Error processing ElevenLabs message:', error);
+          console.error(`❌ [ElevenLabs] Call ${callId} - Error processing message:`, error);
         }
       };
 
       elevenLabsWs.onerror = (error) => {
-        console.error('❌ ElevenLabs WebSocket error:', error);
-        // Try to send error details to Twilio before closing
-        try {
-          socket.send(JSON.stringify({
-            event: 'error',
-            message: 'ElevenLabs connection failed'
-          }));
-        } catch (e) {
-          console.error('Failed to send error to Twilio:', e);
-        }
+        console.error(`❌ [ElevenLabs] Call ${callId} - WebSocket error:`, error);
       };
 
       elevenLabsWs.onclose = (event) => {
-        console.log('❌ ElevenLabs WebSocket closed:', {
+        console.log(`🔌 [ElevenLabs] Call ${callId} - Connection closed:`, {
           code: event.code,
           reason: event.reason,
           wasClean: event.wasClean
@@ -282,14 +270,7 @@ serve(async (req) => {
         socket.close();
       };
     } catch (error) {
-      console.error('❌ Error setting up ElevenLabs connection:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', {
-          message: error.message,
-          stack: error.stack,
-          name: error.name
-        });
-      }
+      console.error(`❌ [ElevenLabs] Call ${callId} - Setup error:`, error);
       socket.close();
     }
   };
@@ -300,75 +281,73 @@ serve(async (req) => {
       
       if (message.event === 'start') {
         twilioStreamSid = message.start?.streamSid || null;
-        console.log('✓ Twilio stream started. streamSid:', twilioStreamSid);
+        console.log(`✅ [Twilio] Call ${callId} - Stream started. SID: ${twilioStreamSid}`);
         
-        // Flush any buffered audio now that we have streamSid
+        // Flush any buffered audio
         if (audioQueue.length > 0) {
-          console.log(`Flushing ${audioQueue.length} buffered audio chunks on stream start`);
+          console.log(`📦 [Twilio] Call ${callId} - Flushing ${audioQueue.length} buffered chunks`);
           audioQueue.forEach(audio => {
-            const payload = forceMuLaw ? safeTranscodeToMuLawBase64(audio, elSampleRate) : audio;
             socket.send(JSON.stringify({
               event: 'media',
               streamSid: twilioStreamSid,
-              media: { payload },
+              media: { payload: audio },
             }));
           });
           audioQueue = [];
         }
 
-        // Start keepalive until first audio arrives (max ~3s)
+        // Start keepalive until first audio arrives
         if (!keepAliveInterval) {
-          console.log('▶️ Starting keepalive frames until first audio...');
+          console.log(`▶️ [Twilio] Call ${callId} - Starting keepalive frames...`);
           keepAliveTicks = 0;
           keepAliveInterval = setInterval(() => {
             if (firstAudioSent || keepAliveTicks >= 6 || socket.readyState !== WebSocket.OPEN) {
               if (keepAliveInterval) {
                 clearInterval(keepAliveInterval);
                 keepAliveInterval = null;
-                console.log('⏹️ Keepalive stopped');
               }
               return;
             }
-            const silence = silentMuLawFrameBase64();
             socket.send(JSON.stringify({
               event: 'media',
               streamSid: twilioStreamSid,
-              media: { payload: silence },
+              media: { payload: silentMuLawFrameBase64() },
             }));
             keepAliveTicks++;
           }, 500) as unknown as number;
         }
       } else if (message.event === 'media' && elevenLabsWs?.readyState === WebSocket.OPEN) {
         mediaInCount++;
-        if (mediaInCount % 50 === 0) {
-          console.log(`Twilio media in: ${mediaInCount} chunks received`);
+        if (mediaInCount % 100 === 0) {
+          console.log(`🎤 [Twilio→ElevenLabs] Call ${callId} - ${mediaInCount} audio chunks received`);
         }
-        // Forward audio from Twilio to ElevenLabs (transcode μ-law 8k -> PCM16 16k)
+        // Forward audio from Twilio to ElevenLabs
         const pcm16b64 = transcodeTwilioMuLawToPCM16B64(message.media.payload);
         elevenLabsWs.send(JSON.stringify({
           user_audio_chunk: pcm16b64,
         }));
       } else if (message.event === 'stop') {
-        console.log('Twilio stream stopped');
+        console.log(`🛑 [Twilio] Call ${callId} - Stream stopped`);
         elevenLabsWs?.close();
       }
     } catch (error) {
-      console.error('Error processing Twilio message:', error);
+      console.error(`❌ [Twilio] Call ${callId} - Error processing message:`, error);
     }
   };
 
   socket.onclose = async () => {
-    console.log('❌ Twilio WebSocket closed for call:', callId);
+    console.log(`🔌 [Twilio] Call ${callId} - Connection closed at ${new Date().toISOString()}`);
     if (keepAliveInterval) {
       clearInterval(keepAliveInterval);
       keepAliveInterval = null;
     }
     if (elevenLabsWs && elevenLabsWs.readyState === WebSocket.OPEN) {
-      console.log('Closing ElevenLabs WebSocket...');
+      console.log(`🔌 [ElevenLabs] Call ${callId} - Closing connection...`);
       elevenLabsWs.close();
     }
     
     // Update call status
+    console.log(`✅ [DB] Call ${callId} - Updating status to COMPLETED...`);
     await supabase
       .from('calls')
       .update({
@@ -379,6 +358,7 @@ serve(async (req) => {
 
     // Trigger analysis
     if (conversationId) {
+      console.log(`🔍 [Analysis] Call ${callId} - Triggering AI analysis...`);
       await supabase.functions.invoke('analyze-response', {
         body: { callId },
       });
@@ -386,19 +366,13 @@ serve(async (req) => {
   };
 
   socket.onerror = (error) => {
-    console.error('❌ Twilio WebSocket error:', error);
-    if (error instanceof ErrorEvent) {
-      console.error('Error details:', {
-        type: error.type,
-        message: error.message
-      });
-    }
+    console.error(`❌ [Twilio] Call ${callId} - WebSocket error:`, error);
   };
 
   return response;
 });
 
-// ===== Audio utilities for μ-law fallback and keepalive =====
+// ===== Audio utilities =====
 function bytesToBase64(bytes: Uint8Array): string {
   let binary = '';
   const chunkSize = 0x8000;
@@ -448,17 +422,16 @@ function downsampleFloat32(input: Float32Array, inRate: number, outRate: number)
 }
 
 function linearToMuLawSample(sample: number): number {
-  // Clamp
   const MAX = 0x7FFF;
   let s = Math.max(-1, Math.min(1, sample)) * MAX;
-  const BIAS = 0x84; // 132
+  const BIAS = 0x84;
   const CLIP = 32635;
   let sign = (s < 0) ? 0x80 : 0x00;
   if (s < 0) s = -s;
   if (s > CLIP) s = CLIP;
   s = s + BIAS;
   let exponent = 7;
-  for (let expMask = 0x4000; (s & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) { /* find exponent */ }
+  for (let expMask = 0x4000; (s & expMask) === 0 && exponent > 0; exponent--, expMask >>= 1) { /* */ }
   const mantissa = (s >> ((exponent === 0) ? 4 : (exponent + 3))) & 0x0F;
   const mu = ~(sign | (exponent << 4) | mantissa) & 0xFF;
   return mu;
@@ -480,34 +453,32 @@ function safeTranscodeToMuLawBase64(b64: string, inSampleRate: number): string {
     const mu = floatToMuLawBytes(down);
     return bytesToBase64(mu);
   } catch (e) {
-    console.error('Transcode to μ-law failed, falling back to original audio:', e);
-    return b64; // fallback
+    console.error('Transcode to μ-law failed:', e);
+    return b64;
   }
 }
 
 function silentMuLawFrameBase64(): string {
-  // 20ms @8kHz = 160 samples of μ-law silence (0xFF)
   const frame = new Uint8Array(160);
   frame.fill(0xFF);
   return bytesToBase64(frame);
 }
 
-// Inbound (Twilio -> ElevenLabs) transcoding: μ-law 8k -> PCM16 16k
 function muLawByteToLinearSample(u8: number): number {
   const BIAS = 0x84;
   u8 = ~u8 & 0xff;
   const sign = (u8 & 0x80) ? -1 : 1;
   const exponent = (u8 >> 4) & 0x07;
-  const mantissa = u8 & 0x0F;
-  let sample = ((mantissa << 4) + 8) << (exponent + 3);
-  sample -= BIAS;
-  return sign * sample;
+  const mantissa = u8 & 0x0f;
+  let linear = (mantissa << 3) + BIAS;
+  linear <<= exponent;
+  return (sign * (linear - BIAS)) / 32768;
 }
 
 function muLawBytesToFloat32(bytes: Uint8Array): Float32Array {
   const out = new Float32Array(bytes.length);
   for (let i = 0; i < bytes.length; i++) {
-    out[i] = muLawByteToLinearSample(bytes[i]) / 32768;
+    out[i] = muLawByteToLinearSample(bytes[i]);
   }
   return out;
 }
@@ -518,95 +489,54 @@ function upsampleFloat32(input: Float32Array, inRate: number, outRate: number): 
   const newLen = Math.floor(input.length * ratio);
   const out = new Float32Array(newLen);
   for (let i = 0; i < newLen; i++) {
-    const srcPos = i / ratio;
-    const i0 = Math.floor(srcPos);
-    const i1 = Math.min(i0 + 1, input.length - 1);
-    const frac = srcPos - i0;
-    out[i] = (1 - frac) * input[i0] + frac * input[i1];
+    const srcIdx = i / ratio;
+    const lower = Math.floor(srcIdx);
+    const upper = Math.min(lower + 1, input.length - 1);
+    const frac = srcIdx - lower;
+    out[i] = input[lower] * (1 - frac) + input[upper] * frac;
   }
   return out;
 }
 
-function float32ToPCM16LEBytes(input: Float32Array): Uint8Array {
+function float32ToPCM16LE(input: Float32Array): Uint8Array {
   const out = new Uint8Array(input.length * 2);
   const view = new DataView(out.buffer);
   for (let i = 0; i < input.length; i++) {
-     let s = Math.max(-1, Math.min(1, input[i]));
-     view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    const s = Math.max(-1, Math.min(1, input[i]));
+    const int16 = (s < 0 ? s * 0x8000 : s * 0x7FFF) | 0;
+    view.setInt16(i * 2, int16, true);
   }
   return out;
 }
 
-function transcodeTwilioMuLawToPCM16B64(b64: string): string {
+function transcodeTwilioMuLawToPCM16B64(muLawBase64: string): string {
   try {
-    const mu = base64ToBytes(b64);
-    const f32_8k = muLawBytesToFloat32(mu);
-    const f32_16k = upsampleFloat32(f32_8k, 8000, 16000);
-    const pcm16 = float32ToPCM16LEBytes(f32_16k);
+    const muBytes = base64ToBytes(muLawBase64);
+    const float32_8k = muLawBytesToFloat32(muBytes);
+    const float32_16k = upsampleFloat32(float32_8k, 8000, 16000);
+    const pcm16 = float32ToPCM16LE(float32_16k);
     return bytesToBase64(pcm16);
   } catch (e) {
-    console.error('Inbound transcode (μ-law->PCM16) failed, passing original:', e);
-    return b64;
+    console.error('Transcode from μ-law failed:', e);
+    return muLawBase64;
   }
 }
 
-/**
- * Build a conversational prompt with campaign-specific questions
- */
 function buildConversationalPrompt(candidate: any, campaign: any, questions: any[]): string {
-  const sortedQuestions = questions.sort((a, b) => a.sequence_order - b.sequence_order);
-  
-  const questionsList = sortedQuestions
-    .map((q, idx) => `${idx + 1}. ${q.question_text}`)
-    .join('\n');
+  return `You are ${campaign.agent_name || 'an AI Recruiter'} from ${campaign.company_name || 'the company'}. You are conducting a screening call with ${candidate.full_name} for the ${campaign.position} position.
 
-  // Use campaign configuration - no hardcoded values
-  const companyName = campaign.company_name || candidate.current_company || 'the company';
-  const positionName = candidate.position || campaign.position;
-  const agentName = campaign.agent_name || 'AI Assistant';
-  
-  return `You are ${agentName}, an AI HR assistant from ${companyName}. You're conducting a screening call for the ${positionName} position.
-
-CANDIDATE DETAILS:
-- Name: ${candidate.full_name}
-- Position Applied: ${positionName}
-- Phone: ${candidate.phone_number}
-${candidate.current_company ? `- Current Company: ${candidate.current_company}` : ''}
-${candidate.years_experience ? `- Experience: ${candidate.years_experience} years` : ''}
+CAMPAIGN: ${campaign.name}
+${campaign.description ? `ABOUT: ${campaign.description}` : ''}
 
 YOUR ROLE:
 - Be warm, professional, and conversational
-- Speak naturally like a real HR professional would
-- Keep responses concise (2-3 sentences max)
-- Listen actively and acknowledge responses
-- Ask ONE question at a time
-- Let the candidate finish speaking before responding
+- Introduce yourself and the company
+- Ask the screening questions naturally in conversation
+- Listen actively and ask follow-up questions when appropriate
+- Take note of any red flags or concerns
 
-CALL FLOW:
-1. Start with: "Hi ${candidate.full_name}, I'm calling from ${companyName} about the ${positionName} position you applied for. Is this a good time for a quick 2-minute chat?"
-2. If they agree, briefly explain this is a screening call (10-15 minutes)
-3. If they say not a good time, offer to reschedule politely
-4. Go through each question below IN ORDER, naturally and conversationally
-5. After each response, acknowledge briefly before moving to next question
-6. At the end, thank them and mention next steps (team will review and respond in 2-3 business days)
+SCREENING QUESTIONS:
+${questions.map((q, i) => `${i + 1}. ${q.question_text}`).join('\n')}
 
-QUESTIONS TO ASK (in this order):
-${questionsList}
-
-IMPORTANT GUIDELINES:
-- If candidate asks to reschedule, be accommodating and polite
-- If they're not available, thank them and end call gracefully
-- For salary questions, let them share current and expected separately
-- For notice period, confirm the exact duration
-- Don't rush - let natural pauses happen
-- Use acknowledgments like "Thank you for sharing that", "I see", "That's helpful"
-- Stay on topic but be human and empathetic
-
-RESPONSE EXTRACTION:
-- Listen carefully for key information like notice period, salary figures, skills
-- Don't ask follow-up questions unless response is completely unclear
-- Trust the candidate's answers and move forward
-
-Remember: You're representing ${companyName}, so maintain professionalism while being friendly and approachable.`;
+Remember: This is a real person's career opportunity. Be thoughtful, respectful, and human in your approach.`;
 }
-
