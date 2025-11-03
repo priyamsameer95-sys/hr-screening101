@@ -58,18 +58,46 @@ serve(async (req) => {
       campaignName: call.candidate.campaign.name
     });
 
-    // Generate WebSocket stream URL (Twilio requires wss scheme)
+    // Generate WebSocket stream URL (Twilio requires wss scheme) with health-check fallback
     const baseHttps = Deno.env.get('SUPABASE_URL') ?? '';
     const projectRef = baseHttps.match(/https:\/\/([^.]+)/)?.[1] || '';
-    
-    // Use the direct project reference format for WebSocket
-    const streamUrl = `wss://${projectRef}.supabase.co/functions/v1/elevenlabs-stream?callId=${callId}`;
-    
+
+    const primaryWss = `wss://${projectRef}.functions.supabase.co/elevenlabs-stream?callId=${callId}`; // preferred
+    const secondaryWss = `wss://${projectRef}.supabase.co/functions/v1/elevenlabs-stream?callId=${callId}`; // proxy fallback
+
+    const primaryHealth = `https://${projectRef}.functions.supabase.co/elevenlabs-stream?health=check`;
+    const secondaryHealth = `https://${projectRef}.supabase.co/functions/v1/elevenlabs-stream?health=check`;
+
+    const checkReachable = async (url: string) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 1500);
+      try {
+        const res = await fetch(url, { method: 'GET', signal: controller.signal });
+        return res.ok;
+      } catch (e) {
+        console.warn(`⚠️ [Twilio-Handler] Health check failed for ${url}:`, (e as Error)?.message);
+        return false;
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    let streamUrl = primaryWss;
+    const primaryOk = projectRef ? await checkReachable(primaryHealth) : false;
+    if (!primaryOk) {
+      const secondaryOk = projectRef ? await checkReachable(secondaryHealth) : false;
+      streamUrl = secondaryOk ? secondaryWss : primaryWss; // if both fail, still prefer primary format
+    }
+
     console.log(`🔗 [Twilio-Handler] WebSocket URL for call ${callId}:`, {
-      streamUrl,
+      chosen: streamUrl,
+      primaryWss,
+      secondaryWss,
       projectRef,
       timestamp,
-      note: 'Using direct wss:// format for Twilio Media Streams'
+      primaryHealthOk: projectRef ? await checkReachable(primaryHealth) : 'no-projectRef',
+      secondaryHealthOk: projectRef ? await checkReachable(secondaryHealth) : 'no-projectRef',
+      note: 'Prefers functions.supabase.co, falls back to supabase.co/functions/v1'
     });
 
     // Generate TwiML to connect to ElevenLabs via WebSocket (bidirectional audio)
