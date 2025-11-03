@@ -165,6 +165,10 @@ const CandidateUpload = ({ campaignId, onUploadComplete }: CandidateUploadProps)
     }
 
     setUploading(true);
+    let successCount = 0;
+    let duplicateCount = 0;
+    let errorCount = 0;
+
     try {
       // Remove validation fields before inserting
       const candidatesToInsert = validCandidates.map(c => {
@@ -175,19 +179,49 @@ const CandidateUpload = ({ campaignId, onUploadComplete }: CandidateUploadProps)
         };
       });
 
-      const { error } = await supabase.from("candidates").insert(candidatesToInsert);
+      // Insert candidates one by one to handle duplicates gracefully
+      for (const candidate of candidatesToInsert) {
+        const { error } = await supabase
+          .from("candidates")
+          .insert(candidate);
 
-      if (error) throw error;
+        if (error) {
+          if (error.code === "23505") {
+            // Duplicate key - skip
+            duplicateCount++;
+            console.log(`Skipping duplicate: ${candidate.phone_number}`);
+          } else {
+            errorCount++;
+            console.error("Error inserting candidate:", error);
+          }
+        } else {
+          successCount++;
+        }
+      }
+
+      // Get total candidate count
+      const { count } = await supabase
+        .from("candidates")
+        .select("*", { count: "exact", head: true })
+        .eq("campaign_id", campaignId);
 
       // Update campaign candidate count
-      await supabase
-        .from("campaigns")
-        .update({ total_candidates: validCandidates.length })
-        .eq("id", campaignId);
+      if (count !== null) {
+        await supabase
+          .from("campaigns")
+          .update({ total_candidates: count })
+          .eq("id", campaignId);
+      }
+
+      const messages = [];
+      if (successCount > 0) messages.push(`${successCount} added`);
+      if (duplicateCount > 0) messages.push(`${duplicateCount} duplicates skipped`);
+      if (errorCount > 0) messages.push(`${errorCount} errors`);
 
       toast({
-        title: "Candidates uploaded!",
-        description: `${validCandidates.length} candidates added to campaign`,
+        title: successCount > 0 ? "Candidates uploaded!" : "Upload completed with issues",
+        description: messages.join(", "),
+        variant: errorCount > 0 && successCount === 0 ? "destructive" : "default",
       });
 
       setCandidates([]);

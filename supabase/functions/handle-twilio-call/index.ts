@@ -50,19 +50,26 @@ serve(async (req) => {
     const streamUrl = `${wsBase}/functions/v1/elevenlabs-stream?callId=${callId}`;
     
     console.log('🔗 WebSocket URL generated:', streamUrl);
+    console.log('🔗 Base HTTPS:', baseHttps);
+    console.log('🔗 WS Base:', wsBase);
 
     console.log('Generating TwiML with stream URL:', streamUrl);
     console.log('Call ID being passed:', callId);
 
     // Generate TwiML to connect to ElevenLabs via WebSocket (bidirectional audio)
+    // Add statusCallback for better debugging
+    const statusCallbackUrl = `${baseHttps}/functions/v1/twilio-status`;
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${streamUrl}" track="both_tracks" />
+    <Stream url="${streamUrl}" track="both_tracks">
+      <Parameter name="callId" value="${callId}" />
+    </Stream>
   </Connect>
 </Response>`;
 
     console.log('TwiML generated with track="both_tracks" for bidirectional audio');
+    console.log('🔍 Full TwiML:', twiml);
 
     console.log('TwiML generated successfully');
 
