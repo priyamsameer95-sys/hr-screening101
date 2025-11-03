@@ -60,14 +60,16 @@ serve(async (req) => {
 
     // Generate WebSocket stream URL (Twilio requires wss scheme)
     const baseHttps = Deno.env.get('SUPABASE_URL') ?? '';
-    const wsBase = baseHttps.replace('https://', 'wss://');
-    const streamUrl = `${wsBase}/functions/v1/elevenlabs-stream?callId=${callId}`;
+    const projectRef = baseHttps.match(/https:\/\/([^.]+)/)?.[1] || '';
+    
+    // Use the direct project reference format for WebSocket
+    const streamUrl = `wss://${projectRef}.supabase.co/functions/v1/elevenlabs-stream?callId=${callId}`;
     
     console.log(`🔗 [Twilio-Handler] WebSocket URL for call ${callId}:`, {
       streamUrl,
-      baseHttps,
-      wsBase,
-      timestamp
+      projectRef,
+      timestamp,
+      note: 'Using direct wss:// format for Twilio Media Streams'
     });
 
     // Generate TwiML to connect to ElevenLabs via WebSocket (bidirectional audio)
