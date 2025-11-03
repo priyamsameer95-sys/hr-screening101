@@ -3,11 +3,22 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 console.log('📞 Twilio status webhook function initialized');
 
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
 serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response('OK', { status: 200, headers: corsHeaders });
+  }
+
   console.log('📥 Webhook received:', {
     method: req.method,
     url: req.url,
-    contentType: req.headers.get('content-type')
+    contentType: req.headers.get('content-type'),
+    timestamp: new Date().toISOString()
   });
 
   try {
@@ -83,9 +94,9 @@ serve(async (req) => {
       }
     }
 
-    return new Response('OK', { status: 200 });
+    return new Response('OK', { status: 200, headers: corsHeaders });
   } catch (error) {
-    console.error('Error handling Twilio status:', error);
-    return new Response('Error', { status: 500 });
+    console.error('❌ Error handling Twilio status:', error);
+    return new Response('Error', { status: 500, headers: corsHeaders });
   }
 });
