@@ -42,6 +42,8 @@ const CreateCampaignDialog = ({ open, onOpenChange }: CreateCampaignDialogProps)
     name: "",
     position: "",
     description: "",
+    companyName: "",
+    agentName: "AI Assistant",
     startDate: undefined as Date | undefined,
     endDate: undefined as Date | undefined,
     template: "",
@@ -79,6 +81,8 @@ const CreateCampaignDialog = ({ open, onOpenChange }: CreateCampaignDialogProps)
           name: formData.name,
           position: formData.position,
           description: formData.description || null,
+          company_name: formData.companyName || "Your Company",
+          agent_name: formData.agentName || "AI Assistant",
           scheduled_start: formData.startDate?.toISOString(),
           scheduled_end: formData.endDate?.toISOString(),
           question_template_id: templates?.id,
@@ -110,6 +114,8 @@ const CreateCampaignDialog = ({ open, onOpenChange }: CreateCampaignDialogProps)
         name: "",
         position: "",
         description: "",
+        companyName: "",
+        agentName: "AI Assistant",
         startDate: undefined,
         endDate: undefined,
         template: "",
@@ -189,6 +195,28 @@ const CreateCampaignDialog = ({ open, onOpenChange }: CreateCampaignDialogProps)
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   rows={3}
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="companyName">Company Name *</Label>
+                  <Input
+                    id="companyName"
+                    placeholder="e.g., Acme Corp"
+                    value={formData.companyName}
+                    onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="agentName">AI Agent Name</Label>
+                  <Input
+                    id="agentName"
+                    placeholder="e.g., Sarah, Alex"
+                    value={formData.agentName}
+                    onChange={(e) => setFormData({ ...formData, agentName: e.target.value })}
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

@@ -533,10 +533,12 @@ function buildConversationalPrompt(candidate: any, campaign: any, questions: any
     .map((q, idx) => `${idx + 1}. ${q.question_text}`)
     .join('\n');
 
-  const companyName = campaign.company_name || candidate.current_company || 'CashKaro';
+  // Use campaign configuration - no hardcoded values
+  const companyName = campaign.company_name || candidate.current_company || 'the company';
   const positionName = candidate.position || campaign.position;
+  const agentName = campaign.agent_name || 'AI Assistant';
   
-  return `You are Kajal, an AI HR assistant from ${companyName}. You're conducting a screening call for the ${positionName} position.
+  return `You are ${agentName}, an AI HR assistant from ${companyName}. You're conducting a screening call for the ${positionName} position.
 
 CANDIDATE DETAILS:
 - Name: ${candidate.full_name}
@@ -578,6 +580,6 @@ RESPONSE EXTRACTION:
 - Don't ask follow-up questions unless response is completely unclear
 - Trust the candidate's answers and move forward
 
-Remember: You're representing ${campaign.company_name || 'the company'}, so maintain professionalism while being friendly and approachable.`;
+Remember: You're representing ${companyName}, so maintain professionalism while being friendly and approachable.`;
 }
 

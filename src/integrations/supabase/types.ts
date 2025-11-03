@@ -122,6 +122,8 @@ export type Database = {
       }
       campaigns: {
         Row: {
+          agent_name: string | null
+          company_name: string | null
           completed_calls: number | null
           created_at: string | null
           created_by: string | null
@@ -140,6 +142,8 @@ export type Database = {
           voice_settings: Json | null
         }
         Insert: {
+          agent_name?: string | null
+          company_name?: string | null
           completed_calls?: number | null
           created_at?: string | null
           created_by?: string | null
@@ -158,6 +162,8 @@ export type Database = {
           voice_settings?: Json | null
         }
         Update: {
+          agent_name?: string | null
+          company_name?: string | null
           completed_calls?: number | null
           created_at?: string | null
           created_by?: string | null
