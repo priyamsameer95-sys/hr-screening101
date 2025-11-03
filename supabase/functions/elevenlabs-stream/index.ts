@@ -16,10 +16,17 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const upgradeValue = req.headers.get("upgrade");
+  const connectionValue = req.headers.get("connection");
+  
   console.log(`📞 [ElevenLabs] ${requestTimestamp} - Incoming request:`, { 
     method: req.method, 
     url: req.url,
-    hasUpgradeHeader: req.headers.has('upgrade')
+    upgrade: upgradeValue,
+    connection: connectionValue,
+    userAgent: req.headers.get("user-agent"),
+    origin: req.headers.get("origin"),
+    allHeaders: Object.fromEntries(req.headers.entries())
   });
 
   // Add health check endpoint for testing
@@ -38,10 +45,21 @@ serve(async (req) => {
   const upgradeHeader = req.headers.get("upgrade") || "";
   
   if (upgradeHeader.toLowerCase() !== "websocket") {
-    console.error(`❌ [ElevenLabs] Not a WebSocket request. Upgrade: ${upgradeHeader}`);
-    return new Response("Expected WebSocket connection", { 
+    const errorMsg = `Not a WebSocket request. Upgrade header: '${upgradeHeader}'. Expected 'websocket'`;
+    console.error(`❌ [ElevenLabs] ${errorMsg}`);
+    console.error(`❌ [ElevenLabs] Full request details:`, {
+      method: req.method,
+      url: req.url,
+      headers: Object.fromEntries(req.headers.entries())
+    });
+    return new Response(JSON.stringify({ 
+      error: errorMsg,
+      received_upgrade: upgradeHeader,
+      expected_upgrade: "websocket",
+      hint: "This endpoint only accepts WebSocket connections"
+    }), { 
       status: 400,
-      headers: corsHeaders 
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
   }
 
@@ -65,7 +83,27 @@ serve(async (req) => {
     return new Response("Missing ElevenLabs credentials", { status: 500 });
   }
 
-  const { socket, response } = Deno.upgradeWebSocket(req);
+  console.log(`🔄 [ElevenLabs] Call ${callId} - Attempting WebSocket upgrade...`);
+  
+  let socket: WebSocket;
+  let response: Response;
+  
+  try {
+    const upgrade = Deno.upgradeWebSocket(req);
+    socket = upgrade.socket;
+    response = upgrade.response;
+    console.log(`✅ [ElevenLabs] Call ${callId} - WebSocket upgrade successful`);
+  } catch (error) {
+    console.error(`❌ [ElevenLabs] Call ${callId} - WebSocket upgrade failed:`, error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    return new Response(JSON.stringify({ 
+      error: "WebSocket upgrade failed",
+      details: errorMsg
+    }), { 
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
@@ -366,7 +404,16 @@ serve(async (req) => {
   };
 
   socket.onerror = (error) => {
-    console.error(`❌ [Twilio] Call ${callId} - WebSocket error:`, error);
+    console.error(`❌ [Twilio] Call ${callId} - WebSocket error at ${new Date().toISOString()}:`, error);
+    if (error instanceof ErrorEvent) {
+      console.error(`❌ [Twilio] Call ${callId} - Error details:`, {
+        type: error.type,
+        message: error.message,
+        filename: error.filename,
+        lineno: error.lineno,
+        colno: error.colno
+      });
+    }
   };
 
   return response;

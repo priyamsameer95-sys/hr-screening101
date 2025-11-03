@@ -14,11 +14,14 @@ serve(async (req) => {
     return new Response('OK', { status: 200, headers: corsHeaders });
   }
 
-  console.log('📥 Webhook received:', {
+  console.log('📥 [Twilio-Status] Webhook received:', {
     method: req.method,
     url: req.url,
     contentType: req.headers.get('content-type'),
-    timestamp: new Date().toISOString()
+    userAgent: req.headers.get('user-agent'),
+    origin: req.headers.get('origin'),
+    timestamp: new Date().toISOString(),
+    allHeaders: Object.fromEntries(req.headers.entries())
   });
 
   try {
@@ -26,6 +29,13 @@ serve(async (req) => {
     const callSid = formData.get('CallSid');
     const callStatus = formData.get('CallStatus');
     const callDuration = formData.get('CallDuration');
+    
+    console.log('📋 [Twilio-Status] Form data received:', {
+      callSid: callSid?.toString(),
+      callStatus: callStatus?.toString(),
+      callDuration: callDuration?.toString(),
+      allFields: Object.fromEntries(formData.entries())
+    });
 
     const supabase = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
@@ -64,12 +74,13 @@ serve(async (req) => {
       .select('id')
       .single();
 
-    console.log('📞 Twilio status webhook:', { 
-      callSid: callSid?.toString().substring(0, 10) + '...', 
+    console.log('✅ [Twilio-Status] Call updated successfully:', { 
+      callSid: callSid?.toString(), 
       twilioStatus: callStatus, 
       mappedStatus: ourStatus,
       duration: callDuration,
-      callId: updatedCall?.id 
+      callId: updatedCall?.id,
+      timestamp: new Date().toISOString()
     });
 
     // If call completed, trigger analysis
